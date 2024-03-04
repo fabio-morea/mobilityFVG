@@ -32,8 +32,8 @@ cols_to_keep <-  c("Giorno",
  
 ```{r}
 #read data and filter relevant columns
-df <- read_excel('EXPORT FVG _ 6-10 MARZO 2023.xlsx')  %>% 
-    select(cols_to_keep)
+df <- read_excel('./data/EXPORT FVG _ 6-10 MARZO 2023.xlsx')  %>% 
+    select(all_of(cols_to_keep))
 
 # remove whitespace in column names
 colnames(df) <- gsub(" ", "_", colnames(df))
