@@ -1,0 +1,117 @@
+---
+title: "test 6 - 10 / 3 / 2023"
+output:
+  pdf_document: default
+---
+
+# Script per la preparazione dei dati
+
+```{r include=FALSE}
+library(tidyverse)
+
+```
+ 
+```{r warning=FALSE}
+#read data a
+df <- read_csv('dati_6_10_marzo_2023.csv')
+colnames(df)
+
+```
+ 
+```{r}
+# Group by departure and destination, then calculate the sum of n_viaggi
+edges <- df %>%
+  group_by(origin, destination, direction) %>%
+  summarise(n = sum(n)) %>%
+  ungroup() %>%
+  pivot_wider(names_from = direction, values_from = n, values_fill = 0) %>%
+  mutate(net = inbound - outbound) %>%
+  mutate(ratio = if_else( outbound > 0  , inbound / outbound, 0))
+hist(edges$inbound)
+table(edges$work_holiday)
+
+```
+```{r}
+
+
+# Create scatterplot
+edges %>% ggplot(aes(x = inbound, y = outbound)) +
+  geom_point() +
+  scale_x_log10() +
+  scale_y_log10() +
+  labs(x = "Inbound (log scale)", y = "Outbound (log scale)", color = "Weekday") +
+  ggtitle("Scatterplot of Inbound and Outbound (log scale) by Weekday")
+
+# Create scatterplot
+edges %>% ggplot(aes(x = net, y = ratio)) +
+  geom_point() +
+  scale_x_log10() 
+```
+
+```{r}
+library(igraph)
+g <- igraph::graph_from_data_frame(edges,  directed = FALSE)
+g <- set_edge_attr(g, "weight", value = E(g)$outbound)
+g <- igraph::simplify(g)
+all_positive <- all(E(g)$weight >= 0)
+
+if (all_positive) {
+  print("All edge weights are positive.")
+} else {
+  print("Not all edge weights are positive.")
+}
+
+# Prune edges with weight equal to 0
+g <- delete_edges(g, which(E(g)$weight == 0))
+ 
+# Plot the network
+plot(g, vertex.label.cex = 0.8)
+```
+check varaibility of resutls
+```{r}
+g1 <-igraph::as.undirected(g)
+for (i in 1:10){
+  print(max(cluster_louvain(g1, resolution = 1)$membership))
+}
+ 
+```
+```{r}
+library(CCD)
+library(aricode)
+comms <- CCD::consensus_community_detection(g, 
+                                            p = 0.9, 
+                                            q = 0.5, 
+                                            t = 100,
+                                            method = "LV", 
+                                            r = c(0.8,1.0,1.5), 
+                                            group_outliers = FALSE)
+V(g)$community <- comms$membership
+V(g)$gamma <- comms$gamma
+mu = CCD::empirical_mu(g)
+print(mu)
+hist(comms$gamma)
+hist(comms$membership)
+
+plot(comms, g, vertex.label = NA, vertex.size = 1, edge.width = 0.1, layout = layout.kamada.kawai(g), vertex.color = V(g)$gamma)
+ 
+```
+
+```{r}
+#comms$membership <- as.factor(comms$membership)
+
+# Create a list to store subgraphs
+subgraphs <- list()
+
+# Loop through each community
+for (i in unique(comms$membership)) {
+  # Extract vertices belonging to the current community
+  vertices_in_community <- which(comms$membership == i)
+  # Create subgraph for the current community
+  subgraphs[[i]] <- subgraph(g, vertices_in_community)
+  # Plot the subgraph
+  plot(subgraphs[[i]], main = paste("Community", i),vertex.color = V(g)$gamma, edge.width = E(g)$weight/1000)
+}
+
+
+```
+
