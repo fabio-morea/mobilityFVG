@@ -1,0 +1,691 @@
+---
+title: "Exploring mobility dynamics in FVG - part 3: optimal partition"
+date: "2023-03-06"
+output: pdf_document
+---
+
+# Objective
+
+Mobility flows are encoded in a weighted undeirected newwor, with locations as nodes and mobility flows as edges; the weight represents the average number of people moving between A and B, in a typical day of the given time frame.
+
+Network analysis is carried out with `igraph` package. Hierarchical community structure is analysed with `dendextend` package
+
+```{r include=FALSE}
+library(tidyverse)
+library(readxl)
+library(igraph)
+#install.packages("dendextend")
+library(dendextend)
+library(aricode)
+library(communities)
+
+```
+
+```{r}
+file_name = "mobility_fvg_sample_01.graphml"   
+g = igraph::read_graph(file_name, format="graphml")
+lo = layout.fruchterman.reingold(g,weights = E(g)$weight)
+plot(g,vertex.label = NA, layout = lo, vertex.size = 5)
+```
+
+
+# communities
+
+## use a commuity distance to spread apart the communities in ayout.fruchterman.reingold(g)
+
+```{r}
+comm_distance <- function(g, membership, eps=.02) {
+  df <- as_long_data_frame(g) %>% select(from, to, weight)
+  df$dist <- 0
+  for (i in 1:nrow(df)) {
+    same_comm = (membership[df$from[i]] == membership[df$to[i]])
+    df$dist[i] <- eps + (1-eps)* df$w[i] * D[df$from[i],df$to[i]]
+  } 
+  return(df$dist)
+}
+
+comms <- infomap.community(g)
+
+lo = layout.fruchterman.reingold(g,
+                                 weights = comm_distance(g, comms$membership, eps=.01))
+plot(g, 
+     layout = lo, 
+     vertex.label = NA,
+     vertex.size = 5,
+     vertex.color = comms$membership, 
+     edge.color = 'lightgray')
+
+   
+```
+
+```{r}
+comms <- igraph::cluster_louvain(g)
+
+lo = layout.fruchterman.reingold(g,
+                                 weights = comm_distance(g, comms$membership, eps=.01))
+plot(g, 
+     layout = lo, 
+     vertex.label = NA,
+     vertex.size = 5,
+     vertex.color = comms$membership, 
+     edge.color = 'lightgray')
+```
+
+
+
+```{r}
+
+comms <- igraph::label.propagation.community(g)
+
+lo = layout.fruchterman.reingold(g,
+                                 weights = comm_distance(g, comms$membership, eps=.1))
+plot(g, 
+     layout = lo, 
+     vertex.label = NA,
+     vertex.size = 5,
+     vertex.color = comms$membership, 
+     edge.color = 'lightgray')
+```
+
+
+```{r}
+ comms <- CCD::consensus_community_detection(g,
+                                             method = 'LV', 
+                                             t = 100,
+                                             q = 0.5,# remove 50% 
+                                             p = 0.9,# higlight
+                                             group = FALSE)
+
+lo = layout.fruchterman.reingold(g,
+                                 weights = comm_distance(g, comms$membership, eps=.01))
+hist(comms$gamma)
+ggg <- round(comms$gamma,1)*10
+table(ggg)
+plot(g, 
+     layout = lo, 
+     vertex.label = NA,
+     vertex.size = 5,
+     vertex.color = ggg, 
+     edge.color = 'lightgray')
+
+ 
+
+V(g)$gamma <- comms$gamma
+df<- data.frame(name = V(g)$name, gamma = round(V(g)$gamma,2), comm = comms$membership)
+print("Comuni con maggior incertezza:")
+print(head(df%>% arrange(-gamma)))
+plot(g, 
+     layout = lo, 
+     vertex.label = NA,
+     vertex.size = 5,
+     vertex.color = comms$membership, 
+     edge.color = 'lightgray')
+
+
+
+```
+
+```{r}
+ comms <- CCD::consensus_community_detection(g,
+                                             method = 'LP', 
+                                             t = 200,
+                                             q = 0.5,# remove 50% 
+                                             p = 0.8,# higlight
+                                             group = FALSE)
+
+lo = layout.fruchterman.reingold(g,
+                                 weights = comm_distance(g, comms$membership, eps=.01))
+hist(comms$gamma)
+ggg <- round(comms$gamma,1)*10
+table(ggg)
+plot(g, 
+     layout = lo, 
+     vertex.label = NA,
+     vertex.size = 5,
+     vertex.color = ggg, 
+     edge.color = 'lightgray')
+
+ 
+
+V(g)$gamma <- comms$gamma
+df<- data.frame(name = V(g)$name, gamma = round(V(g)$gamma,2))
+print("Comuni con maggior incertezza:")
+print(head(df%>% arrange(-gamma)))
+plot(g, 
+     layout = lo, 
+     vertex.label = NA,
+     vertex.size = 5,
+     vertex.color = comms$membership, 
+     edge.color = 'lightgray')
+
+
+
+```
+ 
+ 
+```{r}
+V(g)$community <- comms$membership
+E(g)$w <- E(g)$weight
+gc <-communities::make_community_network(g)
+plot(gc)
+```
+
+# walktrap hierarchical communities
+
+```{r}
+commw <-walktrap.community(g, steps = 3)
+dw<-as.dendrogram(commw)
+
+hcut = 180
+# use cut()$upper or cut()$lower to produce dendrograms
+#ncs = data.frame()
+#for (i in 199:100){
+  # upper <- cut(dw, h = hcut)$upper
+  # lower <- cut(dw, h = hcut)$lower
+  # nc <- length(lower)
+  # #ncs <- rbind(ncs, data.frame(i, nc))
+#}
+
+#cut at specified height
+hcut = 190
+upper <- cut(dw, h = hcut)$upper
+lower <- cut(dw, h = hcut)$lower
+nc <- length(lower)
+print(paste("cutting at ", hcut,"we obtain", nc, "communities"))
+
+#sample plot
+lower[[1]] %>% plot(horiz = TRUE)
+```
+ 
+
+
+## cut at specified k
+```{r}
+
+# cut with dendextend, specifying the number of communiteis k
+dend <- dw
+comm_ids <- cutree_1k.dendrogram(dend,k=3)  
+
+# extract labels as named vector
+# specify  communities or h height
+wt_comms_k <- function(g, steps, k){
+  commw <-walktrap.community(g, steps = steps)
+  dend<-as.dendrogram(commw)
+  comm_ids <- cutree_1k.dendrogram(dend,k=k)  
+  return(comm_ids)
+}
+
+
+add_community_names <- function(g, community_id) {
+  V(g)$community <- community_id 
+  V(g)$str <- strength(g)# Create community_name attribute
+  for (community_id in unique(V(g)$community)) {
+    community_nodes <-V(g)$community == community_id
+    max_degree_node <- which.max(V(g)$str * community_nodes)
+    strongest_node_name <- V(g)$name[max_degree_node]
+    V(g)$community_name[community_nodes] <- paste0("C_", strongest_node_name)
+    #print(paste(community_id,strongest_node_name))
+  }
+  return(g)
+}
+
+comms <- wt_comms_k(g, steps = 3, k = 7)
+g <- add_community_names(g, comms)
+
+table(V(g)$community_name)
+table(V(g)$community)
+
+V(g)$community <- comms
+E(g)$w <- E(g)$weight
+gc <-communities::make_community_network(g)
+plot(gc)
+```
+
+## compare several options for k on the same layout
+```{r}
+
+# set a fixed laout
+g <- igraph::simplify(g)
+mmm <- infomap.community(g)$membership
+cd <- comm_distance(g, mmm, eps=.01)
+lo = layout.fruchterman.reingold(g,weights = cd)
+
+# test several options for k
+for (k in 4:8){
+mmm <- wt_comms_k(g, steps = 3, k = k)
+plot(g, 
+     layout = lo, 
+     vertex.label = NA,
+     vertex.size = 5,
+     vertex.color = mmm, 
+     edge.width = E(g)$w/100,
+     edge.color = 'lightgray')
+
+V(g)$community <- mmm
+E(g)$w <- E(g)$weight
+gc <-communities::make_community_network(g)
+gc <- igraph::simplify(gc, remove.loops = FALSE)
+plot(gc,edge.width = E(g)$w/10)
+
+}
+
+results <- as_long_data_frame(g)
+```
+
+
+# WT stability: similarity across t trials
+stable with constant number of steps
+varies as we change number of steps eg 3,4,5
+```{r}
+library(aricode)
+t = 20
+listC <- c()
+for (i in 1:t){
+  s = sample(c(3,4,5),1)
+  comms <- wt_comms_k(g, steps = s, k = 10)
+  print(paste(i, s , length(table(comms))))
+  listC <- cbind(listC, comms)
+}
+#listC
+#
+xx <- c()
+for (i in 1:t){
+  for (j in 1:t){
+     xx <- c(xx, aricode::NMI(listC[,i], listC[,j]))
+  }
+}
+
+hist(xx)
+plot(xx)
+# result may be sensitive to number of steps
+# depending on k for example k > 22
+```
+# WT dendrogram: quality of communities
+
+As a data scientist tasked with identifying partitions in a network G that meet specific criteria, let's break down the requirements and the approach to solving this problem.
+
+1. **Non-overlapping and Union equals G**: The partitions or communities identified within the network should not overlap, and collectively, they should cover the entire network.
+
+2. **Validity**: Each partition should exhibit a higher density of connections within the community compared to connections with nodes outside the community. This implies that the communities are internally cohesive.
+
+3. **Usefulness for analysis**: The number of partitions (k) should strike a balance between being informative and not overwhelming. Having too few partitions (e.g., k=1, k=2, or k=3) might not provide enough granularity for analysis, while having too many partitions (k almost equal to N, where N is the total number of nodes) might not add significant information and could lead to complexity.
+
+4. **Well-distributed communities**: While it's acceptable to have a giant community and several smaller ones, this should be justified by other configurations failing. Ideally, the communities should be well-distributed in terms of size and should capture different aspects or clusters within the network.
+
+Given these criteria, the problem of identifying the best partition involves searching for configurations that satisfy these constraints and then ranking them based on a suitable index. This allows us to explore different numbers of communities and strike a balance between informativeness and simplicity.
+
+Approach:
+
+1. **Community Detection Algorithms**: Utilize community detection algorithms such as Walktrap to partition the network into communities. The result is a dendrogram that can be cut at different $k$ ,originating alternative partitions (that are consistent to each other). This allows us to explore different numbers of communities and strike a balance between informativeness and simplicity. The next step is to  check if results are *stable*, partitions are  all *valid*, and *rank* them.
+
+2. **Sensitivity Analysis**: Perform sensitivity analysis to assess the robustness of the chosen partition(s) to variations in parameters and algorithms. This ensures that the identified partition(s) are not overly dependent on specific choices.  Check if results are stable with respect to network shuffling and steps WT(g,s). If unstable, use CCD and calculate uncertainty coefficient gamma.
+
+3. **Evaluation Metrics**: Define an evaluation metric or index that captures the fuzziness of the partitions. Mixing Parameter of the wole network is a good choice: quantify the quality of the partitions based on cohesion within communities and separation between communities. Caculate also mixin parameter of each community: a partition is valid if ALL of its communities have a valid mixing parameter
+
+4. **Ranking**: Rank the partitions based on the evaluation metric chosen. Select the partition(s) with the highest score, indicating the best balance between validity, usefulness, and distribution of communities.
+
+By following this approach, we can systematically identify and rank partitions in the network G based on the specified constraints, ultimately selecting the most suitable partition(s) for analysis.
+
+```{r}
+ 
+k = 4
+results = data.frame()
+mu_c_df = data.frame()
+
+for(s in 2:4){ # check the impact of different steps
+commw <-walktrap.community(g, steps = s)
+dend<-as.dendrogram(commw)
+
+  for (k in seq(2,12,1)){
+  print(paste("generating communities for s, k = ", s, k))
+  comm_ids <- cutree_1k.dendrogram(dend,k=k)  
+  g <- add_community_names(g, comm_ids)
+  print(table(V(g)$community))
+  
+  edges<-as_long_data_frame(g)
+  edges$inter_comm <- (edges$from_community != edges$to_community) 
+  inter_community_weight <- sum(edges$weight[ edges$inter_comm == TRUE])
+  total_weight <- sum(edges$weight)
+  mu = inter_community_weight / total_weight
+  
+  communities <- unique(edges$from_community)
+  for (community_id in communities) {
+    comm_members <- edges$from_community == community_id
+    c_size = sum(V(g)$community == community_id)
+    intra_community_weight = sum(edges$weight * edges$inter_comm * comm_members)
+    total_community_weight = sum(edges$weight * comm_members) 
+    extra_community_weight = total_community_weight - intra_community_weight
+    mu_c = round(intra_community_weight / total_community_weight,3)
+    print(paste("community, mu", community_id,mu_c))
+    mu_c_df <- rbind(mu_c_df, data.frame(s, k, community_id, mu_c,
+                                       c_size = c_size,
+                                       intra_w = intra_community_weight,
+                                       estra_w = extra_community_weight,
+                                       total_w = total_community_weight))
+     #mu_per_community_df <- bind_rows(mu_per_community_df, mu)
+}
+  
+  print(paste("mixing parameter of the partition: ", mu))
+  results <- rbind(results, data.frame(s = s, k = k, mu = mu))
+ }
+}
+
+results$s = as.factor(results$s)
+results %>% ggplot(aes(x = k, y = mu, color = s,group = s))+geom_line()+geom_point()+
+  #facet_grid(~s)+
+  geom_hline(yintercept = 0.5)
+
+mean_values <- mu_c_df %>%
+  group_by(s, k) %>%
+  summarize(mean_mu_c = mean(mu_c))
+
+mu_c_df %>%
+  ggplot(aes(x = community_id, y = mu_c, fill = mu_c > 0.5)) +
+  geom_col() +
+  facet_grid(k ~ s) +
+  geom_hline(yintercept = 0.5) +
+  geom_hline(data = mean_values, aes(yintercept = mean_mu_c), color = "blue", linetype = "dashed") +
+  scale_fill_manual(values = c("darkgreen", "red"), guide = FALSE)+
+  theme_light()+ theme(aspect.ratio = 1/2)
+
+
+
+```
+ ```{r}
+
+
+selected <- mu_c_df %>% filter(k %in% c(5,6,7,8,10),
+                               s %in% c(2,3,4)) 
+mean_values <- selected %>%
+  group_by(s, k) %>%
+  summarize(mean_mu_c = mean(mu_c))
+
+selected %>%
+  ggplot(aes(x = community_id, y = mu_c, fill = mu_c > 0.5)) +
+  geom_col() +
+  facet_grid( s~ k) +
+  geom_hline(yintercept = 0.5) +
+  geom_hline(data = mean_values, aes(yintercept = mean_mu_c), color = "blue", linetype = "dashed") +
+  scale_fill_manual(values = c("darkgreen", "red"), guide = FALSE)+
+  theme_minimal()
+
+selected %>%
+  ggplot(aes(x = c_size, y = mu_c, color = mu_c > 0.5)) +
+  geom_point(aes(size = total_w)) +
+  facet_grid( s~ k) +
+  geom_hline(yintercept = 0.5) +
+  geom_hline(data = mean_values, aes(yintercept = mean_mu_c), color = "blue", linetype = "dashed") +
+  scale_color_manual(values = c("darkgreen", "red"), guide = FALSE)+
+  theme_light()
+```
+
+
+NOTE: SINGLE NODE COMMUNITIES HAVE MU == 1 WHICH IS OK
+but happens only for s = 2
+so i prefere s = 3
+
+IDEA: SELECT THE LARGEST K THAT YELDS A VALID MU OVERALL AND VALID FOR EACH COMMUNITY
+s = 3, k = 7
+
+ ```{r}
+commw <-walktrap.community(g, steps = 3)
+dend<-as.dendrogram(commw)
+comm_ids <- cutree_1k.dendrogram(dend,k=7)  
+g <- add_community_names(g, comm_ids)
+print(table(V(g)$community_name ))
+
+ ```
+
+
+##plot communities of dendrogram cut()$lower
+alternative, more complex
+# use cut()$upper or cut()$lower to produce dendrograms
+ncs = data.frame()
+for (i in 199:100){
+  upper <- cut(dw, h = hcut)$upper
+  lower <- cut(dw, h = hcut)$lower
+  nc <- length(lower)
+  ncs <- rbind(ncs, data.frame(i, nc))
+}
+  
+
+commw <-walktrap.community(g)
+dw<-as.dendrogram(commw)
+ncs = data.frame()
+for (i in 199:100){
+  upper <- cut(dw, h = i)$upper
+  lower <- cut(dw, h = i)$lower
+  nc <- length(lower)
+  ncs <- rbind(ncs, data.frame(i, nc))
+
+}
+ncs %>% 
+  filter(nc<25, nc > 5)%>%
+  ggplot(aes(x = i, y = nc))+geom_point()+geom_line()
+
+i = 188
+upper <- cut(dw, h = i)$upper
+lower <- cut(dw, h = i)$lower
+labels(lower)  
+
+for (j in 1:length(lower)){
+  plot(lower[[j]])
+
+}
+
+#install.packages("dendextend")
+library(dendextend)
+dend <- dw
+dend %>% nnodes
+dend %>% get_nodes_attr("height") 
+dend %>% get_nodes_attr("members")
+
+dend %>% plot(horiz = TRUE)
+
+  
+
+## using dendextend
+https://talgalili.github.io/dendextend/articles/dendextend.html
+
+# Methodology for  and cutting
+At this point our challenge is determining the appropriate level to cut a hierarchical clustering dendrogram in an unsupervised setting. This decision is pivotal for interpreting the resulting clusters effectively. To tackle this, we begin with a dataset comprising 200 nodes and aim to cluster them into a meaningful and interpretable number of communities. For instance, having just 2 or 3 communities may not provide sufficient granularity, while having 180 communities may be overly detailed for practical interpretation.
+
+We propose an approach where we specify a range of desired community counts, such as between 10 and 20. We then systematically evaluate which cutting height (denoted as "CUT") results in approximately 10 communities and which leads to around 20 communities. Subsequently, we generate a series of alternative community structures by cutting the dendrogram at different heights ranging from 10 to 20. 
+
+To determine the most probable and stable community structure, we employ a consensus approach. This involves aggregating the results from the alternative community structures and identifying the consensus or most frequently occurring clustering solution across these iterations. By doing so, we aim to identify a robust and reliable community structure that is representative of the underlying data patterns, thereby facilitating meaningful interpretation and analysis.
+ 
+ 
+
+
+ ```{r}
+#install.packages("ggdendro")
+library(ggdendro)
+cut_point = 150
+dwcut <- cut(dw, h = cut_point)$upper
+# basic option
+ggdendrogram(dwcut, rotate = TRUE, leaf_labels = TRUE, labels = TRUE, theme_dendro = TRUE)
+```
+
+
+```{r}
+
+add_comm_label_as_strongest <- function(g, comms) {
+  node_strength <- strength(g)
+  V(g)$comm_labels <- "--"
+  for (i in 1:max(membership(comms))) {
+    community_nodes <- which(membership(comms) == i)
+    strongest_node_within_community <- names(community_nodes)[which.max(node_strength[community_nodes])]
+    community_label <- paste("C_", strongest_node_within_community, sep = "")
+    V(g)$comm_labels[community_nodes] <- community_label
+  }
+  return(g)
+}
+commsLV <- cluster_louvain(g, resolution = 1.5)
+
+g <- add_comm_label_as_strongest(g, commsLV)
+
+table(V(g)$comm_labels)
+name_comm <- data.frame(name = V(g)$name, community = V(g)$comm_labels )
+merged_df <- edges %>%
+  left_join(name_comm, by = c("origin" = "name"))%>%
+  rename(C_origin = community) %>%
+  left_join(name_comm, by = c("destination" = "name")) %>%
+  rename(C_destination = community) 
+```
+
+
+# check varaibility of resutls
+
+```{r}
+comm1 <- cluster_walktrap(g, steps = 3)
+comm2 <- cluster_walktrap(g, steps = 2)
+x <-compare(comm1,comm2,method = c("nmi"))
+
+dd <- as.dendrogram(comms)
+attr(dd, "height")
+plot_dendrogram(comms, mode="hclust")
+plot(dendrogram, main = "Hierarchical Dendrogram")
+cut_dendrogram <- cut(dendrogram, h = 0.5)
+
+# Convert the dendrogram cuts to a community structure
+cut_communities <- as.clusters(cut_dendrogram)
+
+#https://r.igraph.org/reference/compare.html
+for (i in 1:10){
+  g1<- igraph::permute(g, permutation = sample(vcount(g)) )
+  comm1 <- cluster_louvain(g1 )
+  comm2 <- cluster_louvain(g1)
+  x <-compare(comm1,comm2,method = c("nmi"))
+print(x)
+}
+ 
+comm2
+```
+
+
+
+# apply CCD
+```{r}
+library(CCD)
+library(aricode)
+comms <- CCD::consensus_community_detection(g, 
+                                            p = 0.8, 
+                                            q = 0.5, 
+                                            t = 50,
+                                            method = "LV", 
+                                            r = c(1.0 ), 
+                                            group_outliers = TRUE)
+V(g)$community <- comms$membership
+V(g)$gamma <- comms$gamma
+mu = CCD::empirical_mu(g)
+print(mu)
+hist(comms$gamma)
+hist(comms$membership)
+
+plot(comms, g, vertex.label = NA, vertex.size = 1, edge.width = 0.1, layout = layout.kamada.kawai(g), vertex.color = V(g)$gamma)
+ 
+```
+
+```{r}
+# Get the index of the node named "staranzano"
+test_index <- which(V(g)$name == "Muggia")
+nn <- neighbors(g, test_index)
+
+g1 <- igraph::induced.subgraph(graph=g,vids=nn)
+g1 <- igraph::simplify(g1)
+plot(g1)
+
+percentile_25 <- quantile(E(g1)$weight, probs = 0.60)
+
+# Remove edges below the 25th percentile
+edges_to_remove <- which(E(g1)$weight < percentile_25)
+if (length(edges_to_remove) > 0) {
+  g2 <- delete_edges(g1, edges_to_remove)
+}
+
+plot(g2)
+```
+
+```{r}
+#comms$membership <- as.factor(comms$membership)
+
+# Create a list to store subgraphs
+subgraphs <- list()
+
+# Loop through each community
+for (i in unique(comms$membership)) {
+  # Extract vertices belonging to the current community
+  vertices_in_community <- which(comms$membership == i)
+  # Create subgraph for the current community
+  subgraphs[[i]] <- subgraph(g, vertices_in_community)
+  # Plot the subgraph
+  plot(subgraphs[[i]], main = paste("Community", i),vertex.color = V(g)$gamma, edge.width = E(g)$weight/10)
+}
+
+
+```
+
+```{r}
+
+adj_matrix <- as.matrix(as_adjacency_matrix(g, attr = "weight", sparse = FALSE))
+ 
+row_clusters <- hclust(dist(adj_matrix))
+col_clusters <- hclust(dist(t(adj_matrix)))
+adj_matrix_reordered <- adj_matrix[row_clusters$order, col_clusters$order]
+heatmap(adj_matrix_reordered, Rowv = NA, Colv = NA, col = colorRampPalette(c("transparent", "red"))(256), scale = "none", main = "Heatmap of Adjacency Matrix with Clustering")
+```
+
+```{r}
+# Reorder rows and columns based on the community membership
+adj_matrix_reordered <- adj_matrix[order(comms$membership), order(comms$membership)]
+
+# Plot heatmap of the reordered adjacency matrix
+heatmap(adj_matrix_reordered, Rowv = NA, Colv = NA, col = colorRampPalette(c("white", "red"))(128), scale = "none", main = "Heatmap of Adjacency Matrix with Community Membership Clustering")
+```
+
+
+```{r}
+ library(MASS)
+ # Grouping the data by origin and destination, then calculating mean, net and skew
+result <- edges %>%
+  group_by(origin, destination) %>%
+  summarise(mean_inbound = mean( inbound),
+            mean_outbound = mean( outbound),
+            net = sum( inbound) - sum( outbound),
+            skew = ifelse(mean( inbound) > mean( outbound), mean( inbound) / mean( outbound), mean( outbound) / mean( outbound))) %>%
+  mutate(mean_flow = net / (mean_inbound + mean_outbound)) %>%
+  ungroup() 
+
+# Function to fit beta distribution
+fit_beta <- function(x) {
+  fit <- fitdistr(x, dbeta, start = list(shape1 = 1, shape2 = 1))
+  return(fit)
+}
+result
+
+hist(result$mean_flow)
+
+fit <- fitdistr(result$mean_flow, dbeta, start = list(shape1 = 1, shape2 = 2))
+
+result$pair <- paste(result$origin, result$destination, sep = "-")
+# Fit beta distribution for each origin-destination pair
+beta_fits <- lapply(result, function(pair) {
+  fit_beta(result$flow)
+})
+
+# Print the fitted parameters
+print(beta_fits)
+
+# If you want to visualize the fitted beta distributions
+# Plotting the fitted beta distributions
+plot_beta <- function(fit) {
+  curve(dbeta(x, shape1 = fit$estimate["shape1"], shape2 = fit$estimate["shape2"]), 
+        xlim = c(0, 1), ylim = c(0, 10), col = "blue", xlab = "Mean Flow", ylab = "Density", main = "Fitted Beta Distribution")
+}
+
+par(mfrow = c(length(beta_fits), 1))
+for (i in seq_along(beta_fits)) {
+  plot_beta(beta_fits[[i]])
+}
+
+```

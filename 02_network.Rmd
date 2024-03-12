@@ -1,0 +1,183 @@
+---
+title: "Exploring mobility dynamics in FVG - part 2: from data to network"
+date: "2023-03-06"
+output: pdf_document
+---
+
+# Objective
+
+Mobility patterns are **encoded in tabular form**, where each row
+represents a flow from location A to location B, characterized by
+categorical variables (inbound or outbound, resident or traveler) and a
+quantitative indicator of the number of journeys.
+
+The **objective** of this notebook is to **construct a network** where
+nodes represent locations A, B, C, D, etc., and edges encode information
+on mobility flows, within a user-specified time frame. The core task is
+to find a meaningful definition for **edge weights**, considering the
+magnitude of flows between locations.
+
+Finally, we aim to develop a **statistical model** for edge weight
+estimation, allowing for both *point estimates* and *interval
+estimates*, providing insights into the dispersion of data and its
+evolution over time.
+
+The main dataset has been prepared in script 01; however we also use a
+smaller test dataset to clarify the methodology (data is available in
+subfolder `dummy_data`. The R code utilizes the \\\`readxl\\\` package
+to import dummy data from Excel and the \\\`tidyverse\\\` package for
+efficient data manipulation. Specifically, tidyverse\\\` an efficient
+syntax and verbs like \\\`mutate\\\`, \\\`rename\\\`, and \\\`select\\\`
+to clean and preprocess the dataset, enhanching readability and
+facilitating code debug and reuse. Netrowks are created and analysed
+with `igraph` package.
+
+```{r include=FALSE}
+library(tidyverse)
+library(readxl)
+library(igraph)
+```
+
+# test with a simple example: A-B, single day
+
+```{r warning=FALSE}
+#read data a
+edges_simple <- read_excel('./dummy_data/simple_AB_1day.xlsx') 
+# df1 <-   within(df, {
+#   node1 <- ifelse(direction == "out", origin, destination)
+#   node2 <- ifelse(direction == "out", destination, origin)
+# }) %>% select(node1, node2, n)
+head(edges_simple)
+```
+
+A network can be 
+ 
+
+This data can be used straightforward to build a network, with an edge for each row, and weight that matches the direction. Here we show how, and explain why it is not the an optimal way of encoding the information. 
+
+We assume that the edge has a weight that is $w = +n$ if direction is $out$, and $w = -n$ if direction is $in$.
+
+```{r}
+g <- graph_from_data_frame(edges_simple, directed = FALSE)
+E(g)$w = E(g)$n
+```
+
+```{r}
+plot_network_labelled_edges <- function(g){
+  for (i in 1:ecount(g)) {
+  edge <- E(g)[i]
+  first_node_name <- V(g)[.from(edge)]$name
+  second_node_name <- V(g)[.to(edge)]$name
+  direction = E(g)[i]$direction
+  weight = E(g)[i]$w
+  edge_label <- paste0(first_node_name, second_node_name,"_", direction, ": ",weight)
+  E(g)$label[i] <- edge_label
+}
+
+plot(g, 
+     edge.label = E(g)$label, 
+     edge.width = E(g)$n/2, 
+     vertex.color = 'white', 
+     vertex.size = 30)
+}
+plot_network_labelled_edges(g)
+```
+
+A more meaningful choice for weight is mean_flow = mean(in, out), which produces a single edge per day. Moreover, we can measure the simmetry of the flows with
+net_flow = out-in
+and
+sk= net / mean_flow
+
+```{r}
+edges_flow = read_excel('./dummy_data/simple_AB_1day.xlsx') %>%
+  group_by(origin, destination, direction) %>%
+  summarise(n_mean = mean(n)) %>%
+  ungroup() %>%
+  pivot_wider(names_from = direction, values_from = n_mean, values_fill = 0) %>%
+  mutate(flow_mean = (inbound + outbound)/2)  %>%
+  mutate(flow_net = inbound - outbound) %>%
+  mutate(flow_ratio = flow_net / flow_mean)
+edges_flow
+```
+
+
+
+
+```{r}
+df <- read_csv('dati_6_10_marzo_2023.csv') 
+# Group by departure and destination, then calculate the sum of n_viaggi
+edges <- df %>%
+  select('day', 'origin', 'destination', 'direction', 'n') %>%
+  mutate(origin = substr(gsub(" ", "", origin), 1, 8))%>%
+  mutate(destination = substr(gsub(" ", "", destination), 1, 8))%>%
+  
+  group_by(origin, destination, direction) %>%
+  summarise(n_mean = mean(n)) %>%
+  ungroup() %>%
+  pivot_wider(names_from = direction, values_from = n_mean, values_fill = 0) %>%
+  mutate(flow_mean = (inbound + outbound)/2)  %>%
+  mutate(flow_net = inbound - outbound) %>%
+  group_by(origin, destination)%>%
+  mutate(flow_ratio =  flow_net /max(inbound,outbound) )%>%
+  ungroup()
+
+
+V(g)$name <- substr(gsub(" ", "", V(g)$name), 1, 8)
+
+hist(edges$flow_mean )
+hist(edges$flow_net )
+hist(edges$flow_ratio )
+
+```
+
+```{r}
+
+
+# Create scatterplot
+edges %>% ggplot(aes(x = inbound, y = outbound)) +
+  geom_point() +
+  scale_x_log10() +
+  scale_y_log10() +
+  labs(x = "Inbound (log scale)", y = "Outbound (log scale)", color = "Weekday") +
+  ggtitle("Scatterplot of Inbound and Outbound (log scale) by Weekday")
+
+# Create scatterplot
+edges %>% ggplot(aes(x = flow_mean, y = flow_net)) +
+  geom_point() 
+#+  scale_x_log10() 
+
+
+# Create scatterplot
+edges %>% ggplot(aes(x = flow_mean, y = flow_ratio)) +
+  geom_point() 
+#+  scale_x_log10()
+```
+ 
+
+```{r}
+library(igraph)
+g <- igraph::graph_from_data_frame(edges,  directed = FALSE)
+
+
+weights <- (E(g)$outbound + E(g)$inbound)/2
+
+g <- set_edge_attr(g, "weight", value = weights)
+ 
+if (all_positive) 
+  {print("All edge weights are positive.")} else 
+  {print("Not all edge weights are positive.")}
+
+print(paste("g is simple: ",is.simple(g)))
+g <- igraph::simplify(g)
+print(paste("g is simple: ",is.simple(g)))
+
+plot(g, vertex.label.cex = 0.8)
+```
+```{r}
+file_name = "mobility_fvg_sample_01.graphml"   
+g %>% igraph::write_graph(file_name, format="graphml")
+
+
+```
+
+
