@@ -1,6 +1,10 @@
 ---
 title: "Exploring mobility dynamics in FVG - part 1: data preparation"
-format: pdf
+format:
+  pdf:
+    toc: true
+    number-sections: true
+    colorlinks: true
 editor: visual
 ---
 
@@ -310,7 +314,7 @@ plot_points <- locs %>%
   theme_minimal() +
 theme(legend.position = 'none')+
   theme(aspect.ratio = 1)+
-  ggtitle("Locations bly longitude and latitude")
+  ggtitle("Locations on a map")
 
 top20 <- locs
 
@@ -318,10 +322,10 @@ plot_head <- locs %>% arrange(-s) %>% head(10) %>%
     ggplot(aes(y = reorder(loc, s), x = s)) +   
     geom_col(fill = 'red', alpha= 0.5) + 
     theme_minimal() + 
-    theme(aspect.ratio = 1)+
+    theme(aspect.ratio = 2)+
     ggtitle("top 10 locations by flow")
 
 # Arrange plots in a row
 
-grid.arrange(plot_points, plot_head, ncol = 2)
+grid.arrange(plot_points, plot_head, nrow = 2)
 ```
