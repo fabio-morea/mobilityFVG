@@ -1,0 +1,51 @@
+---
+title: "Exploring mobility dynamics in FVG - part 3: communities"
+author: "Fabio Morea"
+format: html
+editor: visual
+---
+
+## 
+
+# introduction
+
+The primary goal of this notebook is to establish a methodology for
+partitioning the set of locations into distinct *communities*.
+Additionally, it aims to conduct comparative analyses across various
+partitions, including those derived from data spanning different time
+intervals or originating from diverse groups of individuals.
+
+The analysis is based on the network created in script 2, where mobility
+flows are encoded in a weighted undirected network. Here the nodes
+correspond to locations and the edges represent mobility flows. The
+weight of each edge represents the average daily movement of individuals
+between locations A and B within the specified time period.
+
+::: callout-note
+## coding specifications
+
+Network analysis is carried out with `igraph` package. Hierarchical
+community structure is analysed with `dendextend` package.
+:::
+
+```{r}
+#| warning: false
+#| echo: false
+library(tidyverse)
+library(readxl)
+library(igraph)
+library(dendextend)
+library(aricode)
+library(communities)
+
+```
+
+# requirements of the partition
+
+A community is
+
+COmmunities must be valid ($\mu <0.5$) and relevant (k\>1, k\<n)
+
+A partition is
+
+Partitions must be stable

@@ -14,7 +14,6 @@ Network analysis is carried out with `igraph` package. Hierarchical community st
 library(tidyverse)
 library(readxl)
 library(igraph)
-#install.packages("dendextend")
 library(dendextend)
 library(aricode)
 library(communities)
@@ -24,61 +23,131 @@ library(communities)
 ```{r}
 file_name = "mobility_fvg_sample_01.graphml"   
 g = igraph::read_graph(file_name, format="graphml")
+V(g)$str<-strength(g)
+df<- data.frame(n = V(g)$name, str = round(strength(g),1))
+df <- df %>% arrange(-str) 
+df %>% head(10)
+
 lo = layout.fruchterman.reingold(g,weights = E(g)$weight)
-plot(g,vertex.label = NA, layout = lo, vertex.size = 5)
+plot(g,vertex.label = NA, layout = lo, vertex.size = V(g)$str/5000)
+
 ```
 
 
 # communities
-
-## use a commuity distance to spread apart the communities in ayout.fruchterman.reingold(g)
+Using layout.fruchterman.reingold(g) and communities::layout_distance_comm() to improve the visualization of communities 
 
 ```{r}
-comm_distance <- function(g, membership, eps=.02) {
-  df <- as_long_data_frame(g) %>% select(from, to, weight)
-  df$dist <- 0
-  for (i in 1:nrow(df)) {
-    same_comm = (membership[df$from[i]] == membership[df$to[i]])
-    df$dist[i] <- eps + (1-eps)* df$w[i] * D[df$from[i],df$to[i]]
-  } 
-  return(df$dist)
+comms <- infomap.community(g)
+V(g)$community <- comms$membership
+
+comm_label_as_strongest <- function(g, comms) {
+  g1 <- g
+  node_strength <- strength(g1)
+  V(g1)$comm_labels <- "--"
+  for (i in 1:max(membership(comms))) {
+    community_nodes <- which(membership(comms) == i)
+    strongest_node_within_community <- names(community_nodes)[which.max(node_strength[community_nodes])]
+
+        print(strongest_node_within_community)
+    community_label <- paste("C_", strongest_node_within_community, sep = "")
+    V(g1)$comm_labels[community_nodes] <- community_label
+  }
+  return(V(g1)$comm_labels)
+}
+V(g)$clabels <- comm_label_as_strongest(g, comms)
+mmm <- comms$membership
+names(mmm)<- V(g)$name
+lo = layout.fruchterman.reingold(g,
+     weights = communities::layout_distance_comm(g, mmm, eps=.2))
+
+plot(g, 
+     layout = lo, 
+     vertex.label = NA,
+     vertex.size = V(g)$str/3000,
+     vertex.color = V(g)$community, 
+     edge.color = 'lightgray')
+ 
+list_comms = unique(comms$membership)
+for (c in list_comms){
+  gcom <- igraph::induced.subgraph(g, vids = V(g)$community == c )
+  plot(gcom, 
+     layout = layout_with_graphopt(gcom), 
+     vertex.label = V(gcom)$name,
+     vertex.size = V(gcom)$str/3000,
+     edge.color = 'lightgray',
+     edge.width = E(g)$weight/30,
+     main = paste("Community ", V(gcom)$clabels[1]))
+}
+```
+
+check stability
+
+```{r}
+similar <- c()
+for (i in 1:100){
+  g1 <- g1<- igraph::permute(g, permutation = sample(vcount(g)) )
+  comm1 <- infomap.community(g1 )
+  comm2 <- infomap.community(g1)
+  similar <-c(similar, compare(comm1,comm2,method = c("nmi")))
+}
+hist(similar)
+ 
+```
+```
+
+
+```{r}
+comms <- igraph::cluster_louvain(g, resolution = 1.5)
+V(g)$community <- comms$membership
+
+comm_label_as_strongest <- function(g, comms) {
+  g1 <- g
+  node_strength <- strength(g1)
+  V(g1)$comm_labels <- "--"
+  for (i in 1:max(membership(comms))) {
+    community_nodes <- which(membership(comms) == i)
+    strongest_node_within_community <- names(community_nodes)[which.max(node_strength[community_nodes])]
+
+        print(strongest_node_within_community)
+    community_label <- paste("C_", strongest_node_within_community, sep = "")
+    V(g1)$comm_labels[community_nodes] <- community_label
+  }
+  return(V(g1)$comm_labels)
+}
+V(g)$clabels <- comm_label_as_strongest(g, comms)
+lo = layout.fruchterman.reingold(g,weights = communities::layout_distance_comm(g, comms$membership, eps=.2))
+
+plot(g, 
+     layout = lo, 
+     vertex.label = NA,
+     vertex.size = V(g)$str/300,
+     vertex.color = V(g)$community, 
+     edge.color = 'lightgray')
+c = 1
+list_comms = unique(comms$membership)
+for (c in list_comms){
+  gcom <- igraph::induced.subgraph(g, vids = V(g)$community == c )
+  plot(gcom, 
+     layout = layout_with_graphopt(gcom), 
+     vertex.label = V(gcom)$name,
+     vertex.size = V(gcom)$str/3000,
+     edge.color = 'lightgray',
+     edge.width = E(g)$weight/50,
+     main = paste("Community ", V(gcom)$clabels[1]))
+}
+```
+
+
+
+```{r}
+for (i in 1:10){
+  comms <- igraph::label.propagation.community(g)
+  print(length(table(comms$membership)))
 }
 
-comms <- infomap.community(g)
-
 lo = layout.fruchterman.reingold(g,
-                                 weights = comm_distance(g, comms$membership, eps=.01))
-plot(g, 
-     layout = lo, 
-     vertex.label = NA,
-     vertex.size = 5,
-     vertex.color = comms$membership, 
-     edge.color = 'lightgray')
-
-   
-```
-
-```{r}
-comms <- igraph::cluster_louvain(g)
-
-lo = layout.fruchterman.reingold(g,
-                                 weights = comm_distance(g, comms$membership, eps=.01))
-plot(g, 
-     layout = lo, 
-     vertex.label = NA,
-     vertex.size = 5,
-     vertex.color = comms$membership, 
-     edge.color = 'lightgray')
-```
-
-
-
-```{r}
-
-comms <- igraph::label.propagation.community(g)
-
-lo = layout.fruchterman.reingold(g,
-                                 weights = comm_distance(g, comms$membership, eps=.1))
+                                 weights = communities::layout_distance_comm(g, comms$membership, eps=.2))
 plot(g, 
      layout = lo, 
      vertex.label = NA,
@@ -96,30 +165,30 @@ plot(g,
                                              p = 0.9,# higlight
                                              group = FALSE)
 
-lo = layout.fruchterman.reingold(g,
-                                 weights = comm_distance(g, comms$membership, eps=.01))
-hist(comms$gamma)
-ggg <- round(comms$gamma,1)*10
-table(ggg)
+V(g)$community <- comms$membership
+
+
+V(g)$clabels <- comm_label_as_strongest(g, comms)
+lo = layout.fruchterman.reingold(g,weights = communities::layout_distance_comm(g, comms$membership, eps=.2))
+
 plot(g, 
      layout = lo, 
      vertex.label = NA,
-     vertex.size = 5,
-     vertex.color = ggg, 
+     vertex.size = V(g)$str/300,
+     vertex.color = V(g)$community, 
      edge.color = 'lightgray')
-
- 
-
-V(g)$gamma <- comms$gamma
-df<- data.frame(name = V(g)$name, gamma = round(V(g)$gamma,2), comm = comms$membership)
-print("Comuni con maggior incertezza:")
-print(head(df%>% arrange(-gamma)))
-plot(g, 
-     layout = lo, 
-     vertex.label = NA,
-     vertex.size = 5,
-     vertex.color = comms$membership, 
-     edge.color = 'lightgray')
+c = 1
+list_comms = unique(comms$membership)
+for (c in list_comms){
+  gcom <- igraph::induced.subgraph(g, vids = V(g)$community == c )
+  plot(gcom, 
+     layout = layout_in_circle(gcom), 
+     vertex.label = V(gcom)$name,
+     vertex.size = V(gcom)$str/1000,
+     edge.color = 'lightgray',
+     edge.width = E(g)$weight/50,
+     main = paste("Community ", V(gcom)$clabels[1]))
+}
 
 
 
@@ -127,36 +196,43 @@ plot(g,
 
 ```{r}
  comms <- CCD::consensus_community_detection(g,
-                                             method = 'LP', 
+                                             method = 'WT', 
                                              t = 200,
-                                             q = 0.5,# remove 50% 
-                                             p = 0.8,# higlight
-                                             group = FALSE)
-
+                                             q = 0.5,# improve stability
+                                             p = 0.9,# highlight
+                                             steps = 3,
+                                             group = TRUE)
+V(g)$community <- comms$membership
+names(comms$membership)<- V(g)$name # required for CCD
 lo = layout.fruchterman.reingold(g,
-                                 weights = comm_distance(g, comms$membership, eps=.01))
+        weights = communities::layout_distance_comm(g, comms$membership, eps=.2))
 hist(comms$gamma)
-ggg <- round(comms$gamma,1)*10
+ggg <- round(comms$gamma,1) 
 table(ggg)
+
+
+ V(g)$clabels <- comm_label_as_strongest(g, comms)
+lo = layout.fruchterman.reingold(g,weights = communities::layout_distance_comm(g, comms$membership, eps=.2))
+
 plot(g, 
      layout = lo, 
      vertex.label = NA,
-     vertex.size = 5,
-     vertex.color = ggg, 
+     vertex.size = V(g)$str/300,
+     vertex.color = V(g)$community, 
      edge.color = 'lightgray')
+c = 1
+list_comms = unique(comms$membership)
+for (c in list_comms){
+  gcom <- igraph::induced.subgraph(g, vids = V(g)$community == c )
+  plot(gcom, 
+     layout = layout_with_graphopt(gcom), 
+     vertex.label = V(gcom)$name,
+     vertex.size = V(gcom)$str/300,
+     edge.color = 'lightgray',
+     edge.width = E(g)$weight/10,
+     main = paste("Community ", V(gcom)$clabels[1]))
+}
 
- 
-
-V(g)$gamma <- comms$gamma
-df<- data.frame(name = V(g)$name, gamma = round(V(g)$gamma,2))
-print("Comuni con maggior incertezza:")
-print(head(df%>% arrange(-gamma)))
-plot(g, 
-     layout = lo, 
-     vertex.label = NA,
-     vertex.size = 5,
-     vertex.color = comms$membership, 
-     edge.color = 'lightgray')
 
 
 
@@ -194,7 +270,7 @@ nc <- length(lower)
 print(paste("cutting at ", hcut,"we obtain", nc, "communities"))
 
 #sample plot
-lower[[1]] %>% plot(horiz = TRUE)
+lower[[2]] %>% plot(horiz = TRUE)
 ```
  
 
@@ -247,7 +323,7 @@ plot(gc)
 # set a fixed laout
 g <- igraph::simplify(g)
 mmm <- infomap.community(g)$membership
-cd <- comm_distance(g, mmm, eps=.01)
+cd <- communities::layout_distance_comm(g, mmm, eps=.01)
 lo = layout.fruchterman.reingold(g,weights = cd)
 
 # test several options for k
@@ -332,11 +408,11 @@ k = 4
 results = data.frame()
 mu_c_df = data.frame()
 
-for(s in 2:4){ # check the impact of different steps
+for(s in 3:4){ # check the impact of different steps
 commw <-walktrap.community(g, steps = s)
 dend<-as.dendrogram(commw)
 
-  for (k in seq(2,12,1)){
+  for (k in seq(3,12,1)){
   print(paste("generating communities for s, k = ", s, k))
   comm_ids <- cutree_1k.dendrogram(dend,k=k)  
   g <- add_community_names(g, comm_ids)
@@ -379,6 +455,9 @@ mean_values <- mu_c_df %>%
   group_by(s, k) %>%
   summarize(mean_mu_c = mean(mu_c))
 
+mu_c_df %>% filter(s ==3, k == 7) %>%
+  ggplot(aes(x = c_size, y = mu_c, fill = mu_c > 0.5)) 
+
 mu_c_df %>%
   ggplot(aes(x = community_id, y = mu_c, fill = mu_c > 0.5)) +
   geom_col() +
@@ -388,7 +467,14 @@ mu_c_df %>%
   scale_fill_manual(values = c("darkgreen", "red"), guide = FALSE)+
   theme_light()+ theme(aspect.ratio = 1/2)
 
-
+mu_c_df %>% filter(s == 3, k <9)%>%
+  ggplot(aes(x = community_id, y = mu_c, fill = mu_c > 0.5)) +
+  geom_col() +
+  facet_grid(k ~ s) +
+  geom_hline(yintercept = 0.5) +
+  #geom_hline(data = mean_values, aes(yintercept = mean_mu_c), color = "blue", linetype = "dashed") +
+  scale_fill_manual(values = c("darkgreen", "red"), guide = FALSE)+
+  theme_light()+ theme(aspect.ratio = 1/2)
 
 ```
  ```{r}
@@ -508,28 +594,34 @@ ggdendrogram(dwcut, rotate = TRUE, leaf_labels = TRUE, labels = TRUE, theme_dend
 
 
 ```{r}
-
-add_comm_label_as_strongest <- function(g, comms) {
-  node_strength <- strength(g)
-  V(g)$comm_labels <- "--"
+i<-1
+comm_label_as_strongest <- function(g, comms) {
+  g1 <- g
+  node_strength <- strength(g1)
+  V(g1)$comm_labels <- "--"
   for (i in 1:max(membership(comms))) {
     community_nodes <- which(membership(comms) == i)
     strongest_node_within_community <- names(community_nodes)[which.max(node_strength[community_nodes])]
+
+        print(strongest_node_within_community)
     community_label <- paste("C_", strongest_node_within_community, sep = "")
-    V(g)$comm_labels[community_nodes] <- community_label
+    V(g1)$comm_labels[community_nodes] <- community_label
   }
-  return(g)
+  return(V(g1)$comm_labels)
 }
-commsLV <- cluster_louvain(g, resolution = 1.5)
+comms <- cluster_louvain(g, resolution = 1.0)
 
-g <- add_comm_label_as_strongest(g, commsLV)
+table(V(g)$labels)
+ V(g)$str <- strength(g)
 
-table(V(g)$comm_labels)
-name_comm <- data.frame(name = V(g)$name, community = V(g)$comm_labels )
+V(g)$labels <- comm_label_as_strongest(g, comms)
+
+table(V(g)$labels)
+name_comm <- data.frame(name = V(g)$name, community = V(g)$labels )
 merged_df <- edges %>%
-  left_join(name_comm, by = c("origin" = "name"))%>%
+  left_join(name_comm, by = c("from_name" = "name"))%>%
   rename(C_origin = community) %>%
-  left_join(name_comm, by = c("destination" = "name")) %>%
+  left_join(name_comm, by = c("to_name" = "name")) %>%
   rename(C_destination = community) 
 ```
 
@@ -541,26 +633,17 @@ comm1 <- cluster_walktrap(g, steps = 3)
 comm2 <- cluster_walktrap(g, steps = 2)
 x <-compare(comm1,comm2,method = c("nmi"))
 
-dd <- as.dendrogram(comms)
+dd <- as.dendrogram(comm1)
 attr(dd, "height")
-plot_dendrogram(comms, mode="hclust")
-plot(dendrogram, main = "Hierarchical Dendrogram")
-cut_dendrogram <- cut(dendrogram, h = 0.5)
+# plot_dendrogram(comm1, mode="hclust")
+# plot(dendrogram, main = "Hierarchical Dendrogram")
+# cut_dendrogram <- cut(dendrogram, h = 0.5)
 
 # Convert the dendrogram cuts to a community structure
-cut_communities <- as.clusters(cut_dendrogram)
+#cut_communities <- as.clusters(cut_dendrogram)
 
 #https://r.igraph.org/reference/compare.html
-for (i in 1:10){
-  g1<- igraph::permute(g, permutation = sample(vcount(g)) )
-  comm1 <- cluster_louvain(g1 )
-  comm2 <- cluster_louvain(g1)
-  x <-compare(comm1,comm2,method = c("nmi"))
-print(x)
-}
- 
-comm2
-```
+
 
 
 
@@ -587,7 +670,7 @@ plot(comms, g, vertex.label = NA, vertex.size = 1, edge.width = 0.1, layout = la
 ```
 
 ```{r}
-# Get the index of the node named "staranzano"
+# Get the index of the node named ""
 test_index <- which(V(g)$name == "Muggia")
 nn <- neighbors(g, test_index)
 
@@ -622,70 +705,5 @@ for (i in unique(comms$membership)) {
   plot(subgraphs[[i]], main = paste("Community", i),vertex.color = V(g)$gamma, edge.width = E(g)$weight/10)
 }
 
-
-```
-
-```{r}
-
-adj_matrix <- as.matrix(as_adjacency_matrix(g, attr = "weight", sparse = FALSE))
- 
-row_clusters <- hclust(dist(adj_matrix))
-col_clusters <- hclust(dist(t(adj_matrix)))
-adj_matrix_reordered <- adj_matrix[row_clusters$order, col_clusters$order]
-heatmap(adj_matrix_reordered, Rowv = NA, Colv = NA, col = colorRampPalette(c("transparent", "red"))(256), scale = "none", main = "Heatmap of Adjacency Matrix with Clustering")
-```
-
-```{r}
-# Reorder rows and columns based on the community membership
-adj_matrix_reordered <- adj_matrix[order(comms$membership), order(comms$membership)]
-
-# Plot heatmap of the reordered adjacency matrix
-heatmap(adj_matrix_reordered, Rowv = NA, Colv = NA, col = colorRampPalette(c("white", "red"))(128), scale = "none", main = "Heatmap of Adjacency Matrix with Community Membership Clustering")
-```
-
-
-```{r}
- library(MASS)
- # Grouping the data by origin and destination, then calculating mean, net and skew
-result <- edges %>%
-  group_by(origin, destination) %>%
-  summarise(mean_inbound = mean( inbound),
-            mean_outbound = mean( outbound),
-            net = sum( inbound) - sum( outbound),
-            skew = ifelse(mean( inbound) > mean( outbound), mean( inbound) / mean( outbound), mean( outbound) / mean( outbound))) %>%
-  mutate(mean_flow = net / (mean_inbound + mean_outbound)) %>%
-  ungroup() 
-
-# Function to fit beta distribution
-fit_beta <- function(x) {
-  fit <- fitdistr(x, dbeta, start = list(shape1 = 1, shape2 = 1))
-  return(fit)
-}
-result
-
-hist(result$mean_flow)
-
-fit <- fitdistr(result$mean_flow, dbeta, start = list(shape1 = 1, shape2 = 2))
-
-result$pair <- paste(result$origin, result$destination, sep = "-")
-# Fit beta distribution for each origin-destination pair
-beta_fits <- lapply(result, function(pair) {
-  fit_beta(result$flow)
-})
-
-# Print the fitted parameters
-print(beta_fits)
-
-# If you want to visualize the fitted beta distributions
-# Plotting the fitted beta distributions
-plot_beta <- function(fit) {
-  curve(dbeta(x, shape1 = fit$estimate["shape1"], shape2 = fit$estimate["shape2"]), 
-        xlim = c(0, 1), ylim = c(0, 10), col = "blue", xlab = "Mean Flow", ylab = "Density", main = "Fitted Beta Distribution")
-}
-
-par(mfrow = c(length(beta_fits), 1))
-for (i in seq_along(beta_fits)) {
-  plot_beta(beta_fits[[i]])
-}
 
 ```

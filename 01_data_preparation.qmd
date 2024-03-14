@@ -10,15 +10,16 @@ editor: visual
 
 # Context and objectives
 
-The dataset consists of information regarding mobility within the Region
-and includes the followinf information: origin and destination, number
-of journeys, date, time and type of journey. Specifically, each entry in
+The dataset consists of information on mobility within the Region and
+includes the following information: origin and destination, number of
+journeys, date, time and type of journey. Specifically, each entry in
 the dataset represents a group of journeys undertaken by individuals.
 
-The dataset also includes date and time feature: journeys are grouped by
-day and into blocks of three hours. Additionally, the 'type' attribute
-distinguishes between residents and tourists, and for residents between
-inbound and outbound journeys.
+The dataset also includes date and time: journeys are grouped by day and
+additional columns provide information to calculate flows by blocks of
+three hours. Additionally, the 'type' attribute distinguishes between
+residents and travellers, and (only for residents) between inbound and
+outbound journeys.
 
 The purpose of this notebook is data preparation and exploration of the
 dataset 'mobilityFVG'.
@@ -30,7 +31,7 @@ The main output is a tidy dataset in `.csv` format.
 The dataset is provided as multiple Excel files (.xlsx format), and
 requires cleaning for analysis. Tasks include:
 
--   Consolidating multiple xlsx files into a single .csv file to ensure
+-   Consolidating multiple xlsx files into a single .csv file ensures
     data consistency and facilitates streamlined analysis
 
 -   Renaming variables to English
@@ -62,9 +63,10 @@ Data sources for this notebook
 
 ```{r}
 input_files <- c('./data/EXPORT FVG _ 6-10 MARZO 2023.xlsx',
-                 './data/EXPORT FVG _ 11-15 MARZO 2023.xlsx',
-                 './data/EXPORT FVG _ 1-5 GIUGNO 2023.xlsx',
-                 './data/EXPORT FVG _ 6-10 GIUGNO 2023.xlsx')
+                 './data/EXPORT FVG _ 11-15 MARZO 2023.xlsx')
+
+                 #'./data/EXPORT FVG _ 1-5 GIUGNO 2023.xlsx',
+                 #'./data/EXPORT FVG _ 6-10 GIUGNO 2023.xlsx'
 
 ```
 
@@ -83,7 +85,8 @@ column_names <- c( "Giorno" ,
 
 selected_cols <- c( "Giorno", 
                     "Comune di partenza", "Comune di arrivo", 
-                    "Tipologia viaggiatore", "Viaggi")
+                    "Tipologia viaggiatore", 
+                    "Viaggi")
 
 new_column_names <- c( "day", "origin", "destination", "type", "n")
 ```
@@ -327,5 +330,5 @@ plot_head <- locs %>% arrange(-s) %>% head(10) %>%
 
 # Arrange plots in a row
 
-grid.arrange(plot_points, plot_head, nrow = 2)
+grid.arrange(plot_points, plot_head, ncol = 1)
 ```

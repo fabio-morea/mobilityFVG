@@ -1,0 +1,270 @@
+---
+title: "Exploring mobility dynamics in FVG - part 2: network"
+format:
+  pdf:
+    toc: true
+    number-sections: true
+    colorlinks: true
+editor: visual
+---
+
+## Objective
+
+Mobility patterns are **encoded in tabular form**, where each row
+represents a flow from location A to location B, characterized by
+categorical variables (inbound or outbound, resident or traveler) and a
+quantitative indicator of the number of journeys.
+
+The **objective** of this notebook is to **construct a network** where
+nodes represent locations A, B, C, D, etc., and edges encode information
+on mobility flows, within a user-specified time frame. The core task is
+to find a meaningful definition for **edge weights**, considering the
+magnitude of flows between locations.
+
+Finally, we aim to develop a **statistical model** for edge weight
+estimation, allowing for both *point estimates* and *interval
+estimates*, providing insights into the dispersion of data and its
+evolution over time.
+
+The main dataset has been prepared in script 01. In the first part of
+this script however we use a smaller test dataset (available in
+subfolder `dummy_data`) to clarify the methodology.
+
+::: {.callout-note appearance="simple"}
+## coding specifications
+
+The R code utilizes the `readxl` package to import dummy data from Excel
+and the `tidyverse` package for efficient data manipulation.
+Specifically, `tidyverse`an efficient syntax and verbs like `mutate`,
+`rename`, and `select` to clean and preprocess the data, enhanching
+readability and facilitating code debugging and reuse. Netrowks are
+created and analysed with`igraph` package.
+:::
+
+# Methodology
+
+To explain the methodology, we can use a simple example of flows between
+two locations A-B, in single day.
+
+```{r warning=FALSE}
+library(tidyverse)
+library(readxl)
+library(igraph)
+```
+
+Loading a toy dataset
+
+```{r warning=FALSE}
+#read data a
+edges_simple <- read_excel('./dummy_data/simple_AB_1day.xlsx') 
+head(edges_simple)
+```
+
+This data can be used straightforward to build a network, with an edge
+for each row, and weight that matches the direction. Here we show how,
+and explain why it is not the an optimal way of encoding the
+information.
+
+We assume that the edge has a weight that is $w = +n$ if direction is
+$out$, and $w = -n$ if direction is $in$.
+
+```{r}
+
+add_edge_labels <- function(g){
+    for (i in 1:ecount(g)) {
+        edge <- E(g)[i]
+        first_node_name <- V(g)[.from(edge)]$name
+        second_node_name <- V(g)[.to(edge)]$name
+        direction = E(g)[i]$direction
+        weight = E(g)[i]$weight
+        edge_label <- paste0(first_node_name, 
+                             second_node_name, 
+                             direction, 
+                             "_",
+                             weight)
+        E(g)$label[i] <- edge_label
+    }
+    return(g)
+}
+```
+
+```{r}
+
+g <- graph_from_data_frame(edges_simple, directed = FALSE)
+E(g)$weight <- E(g)$n
+g <-add_edge_labels(g)
+plot(g, 
+     edge.label = E(g)$label, 
+     edge.width = E(g)$n/2, 
+     vertex.color = 'white', 
+     vertex.size = 30)
+ 
+```
+
+A more meaningful choice for weight is mean_flow = mean(in, out), which
+produces a single edge per day. Moreover, we can measure the symmetry of
+the flows with `net_flow = out-in` and `sk= net / mean_flow`
+
+```{r}
+edges_flow = read_excel('./dummy_data/simple_AB_1day.xlsx') %>%
+  group_by(origin, destination, direction) %>%
+  summarise(n_mean = mean(n)) %>%
+  ungroup() %>%
+  pivot_wider(names_from = direction, values_from = n_mean, values_fill = 0) %>%
+  mutate(flow_mean = (inbound + outbound)/2)  %>%
+  mutate(flow_net = inbound - outbound) %>%
+  mutate(flow_ratio = flow_net / flow_mean)
+edges_flow
+```
+
+```{r}
+g <- graph_from_data_frame(edges_flow, directed = FALSE)
+E(g)$weight = E(g)$flow_mean
+E(g)$direction = ""
+g <-add_edge_labels(g)
+plot(g, 
+     edge.label = E(g)$label, 
+     edge.width = E(g)$weight, 
+     vertex.color = 'white', 
+     vertex.size = 30)
+```
+
+# Using the real data
+
+Load data
+
+```{r}
+flows <- read_csv('./data/flows.csv') 
+ndays = length( unique(flows$day))
+print(ndays)
+```
+
+Caluclate network edges from flows
+
+```{r}
+
+
+ndays = length( unique(flows$day))
+# Group by departure and destination, then calculate the sum of n_viaggi
+ edges <- flows %>%
+  select(day, origin, destination, direction, n) %>%
+  group_by(origin, destination, direction, day) %>%
+  summarise(n_mean = sum(n) / ndays) %>%
+  ungroup() %>%
+  pivot_wider(names_from = direction, values_from = n_mean, values_fill = 0) %>%
+  mutate(
+    flow_mean = (inbound + outbound) / 2,
+    flow_net = inbound - outbound,
+    flow_ratio = flow_net / max(inbound, outbound)
+  ) %>%
+  group_by(origin, destination) %>%
+  filter(flow_mean >= 5) %>%
+  ungroup()
+
+
+edges%>% 
+    group_by(origin)%>%
+    summarize(fm = mean(flow_mean,  na.rm = TRUE)   ) %>%
+    arrange(-fm) %>% head(20)%>%
+    ggplot(aes(y = origin, x = fm )) + geom_col()
+
+
+```
+
+```{r}
+
+
+
+
+hist(edges$flow_mean )
+hist(edges$flow_net )
+hist(edges$flow_ratio )
+```
+
+```{r}
+
+# Create scatterplot
+edges %>% ggplot(aes(x = inbound, y = outbound)) +
+  geom_point() +
+  scale_x_log10() +
+  scale_y_log10() +
+  labs(x = "Inbound (log scale)", y = "Outbound (log scale)", color = "Weekday") +
+  ggtitle("Scatterplot of Inbound and Outbound (log scale) by Weekday")
+
+#Create scatterplot
+edges %>% ggplot(aes(x = inbound, y = outbound)) +
+  geom_point() 
+
+# Create scatterplot
+edges %>% ggplot(aes(x = flow_mean, y = flow_net)) +
+  geom_point() 
+#+  scale_x_log10() 
+
+
+ 
+
+# Create scatterplot
+edges %>% ggplot(aes(x = flow_mean, y = flow_ratio)) +
+  geom_point() 
+#+  scale_x_log10()
+```
+
+```{r}
+edges %>%
+    group_by(origin)%>%
+    summarize(ff = sum(flow_mean))%>%
+    arrange(-ff)
+```
+
+```{r}
+
+g <- igraph::graph_from_data_frame(edges,  directed = FALSE)
+E(g)$weight <- edges$flow_mean
+print(paste("g is simple: ",is.simple(g)))
+g <- igraph::simplify(g,edge.attr.comb = "sum" )
+print(paste("g is simple: ",is.simple(g)))
+
+plot(g, 
+     vertex.label=NA, 
+     vertex.size = strength(g)/5000 )
+```
+
+check strength and coreness
+
+```{r}
+
+df <- data.frame(loc = V(g)$name, 
+                 dd = degree(g),
+                 ss = round(strength(g),0),
+                 kk = coreness(g)) %>%
+    arrange(-ss)
+
+df %>% ggplot(aes(x = dd, y = kk)) + geom_point(aes(size = ss*2), color = 'red',alpha = 0.5)
+df %>% arrange(-ss) %>% head(10)
+```
+
+show neighborhood
+
+```{r}
+g1 <- g
+selected <- which(V(g1)$name == "Muggia")
+nbh<-make_ego_graph(
+  g1,
+  order = 1,
+  nodes = selected,
+  mode = "all",
+  mindist = 0
+)[[1]]
+
+lo = layout.graphopt(nbh)
+plot(nbh, vertex.size = strength(nbh)/500, edge.width = E(nbh)$weight/200, vertex.label = NA, layout = lo)
+plot(nbh, vertex.size = strength(nbh)/500, edge.width = E(nbh)$weight/200,layout = lo)
+
+```
+
+```{r}
+file_name = "mobility_fvg_sample_01.graphml"   
+g %>% igraph::write_graph(file_name, format="graphml")
+
+     
+```
