@@ -23,14 +23,7 @@ library(communities)
 ```{r}
 file_name = "mobility_fvg_sample_01.graphml"   
 g = igraph::read_graph(file_name, format="graphml")
-V(g)$str<-strength(g)
-df<- data.frame(n = V(g)$name, str = round(strength(g),1))
-df <- df %>% arrange(-str) 
-df %>% head(10)
-
-lo = layout.fruchterman.reingold(g,weights = E(g)$weight)
-plot(g,vertex.label = NA, layout = lo, vertex.size = V(g)$str/5000)
-
+print(g)
 ```
 
 

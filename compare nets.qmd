@@ -1,0 +1,179 @@
+---
+title: "Exploring mobility dynamics in FVG - comparing networks"
+format:
+  pdf:
+    toc: true
+    number-sections: true
+    colorlinks: true
+editor: visual
+---
+
+# Objective
+
+comparing two networks
+
+```{r warning=FALSE}
+library(tidyverse)
+library(readxl)
+library(igraph)
+```
+
+```{r}
+flows <- read_csv('./data/flows.csv') 
+ndays = length( unique(flows$day))
+print(ndays)
+```
+
+Caluclate network edges from flows
+
+```{r}
+
+ndays = length( unique(flows$day))
+edges <- flows %>%
+  select(month, origin, destination, direction, n) %>%
+  group_by(origin, destination, direction, month) %>%
+  summarise(n_mean = sum(n) / ndays) %>%
+  ungroup() %>%
+  pivot_wider(names_from = direction, values_from = n_mean, values_fill=0) %>%  mutate(flow_mean = (inbound + outbound) / 2) %>%
+  group_by(origin, destination) %>%
+  filter(flow_mean >= 5) %>%
+  ungroup()
+ 
+
+
+```
+
+How can we compare two networks? by calculating a distance between the
+adjacency matrices
+
+```{r}
+
+g_month <- function(edges, m) {
+  require(igraph)
+  ee <- subset(edges, month == m)
+  gm <- graph_from_data_frame(ee, directed = FALSE)
+  E(gm)$weight <- ee$flow_mean
+  gm <- simplify(gm, edge.attr.comb = "sum")
+  return(gm)
+}
+
+g3 <- g_month(edges, 3)
+g6 <- g_month(edges, 6)
+
+m3 <- as.matrix(get.adjacency(g3, attr = "weight", sparse = FALSE))
+m6 <- as.matrix(get.adjacency(g6, attr = "weight", sparse = FALSE))
+
+similarity <- function(A1, A2) {
+  if (dim(A1) != dim(A2)) {
+    stop("Adjacency matrices must have the same dimensions.")
+  }
+  squared_diff <- (A1 - A2)^2
+  
+  # Sum of squared differences
+  sum_squared_diff <- sum(squared_diff)
+  
+  # Euclidean distance is the square root of the sum of squared differences
+  euclidean_dist <- sqrt(sum_squared_diff)
+  
+  return(euclidean_dist)
+}
+
+similarity_score <- similarity(m3, m6)
+print(similarity_score)
+
+jaccard_distance <- function(A1, A2) {
+  # Ensure both adjacency matrices have the same dimensions
+  if (dim(A1) != dim(A2)) {
+    stop("Adjacency matrices must have the same dimensions")
+  }
+  
+  # Compute intersection and union of the two sets of edges
+  intersection <- sum(pmin(A1, A2))
+  union <- sum(pmax(A1, A2))
+  
+  # Jaccard distance is 1 - (intersection / union)
+  jaccard_dist <- 1 - (intersection / union)
+  
+  return(jaccard_dist)
+}
+
+jd <- jaccard_distance(m3, m6)
+jd
+
+```
+
+how can we compare two networks? by comparing the strength and coreness
+of individual nodes
+
+```{r}
+
+df3 <- data.frame(loc = V(g3)$name, 
+                 dd = degree(g3),
+                 ss = round(strength(g3),0),
+                 kk = coreness(g3)) %>%
+    arrange(-ss)
+
+df3 %>% ggplot(aes(x = dd, y = kk)) + geom_point(aes(size = ss*2), color = 'red',alpha = 0.5)
+#df %>% arrange(-ss) %>% head(10)
+df6 <- data.frame(loc = V(g6)$name, 
+                 dd = degree(g6),
+                 ss = round(strength(g6),0),
+                 kk = coreness(g6)) %>%
+    arrange(-ss)
+
+df6 %>% ggplot(aes(x = dd, y = kk)) + geom_point(aes(size = ss*2), color = 'blue',alpha = 0.5)
+#df %>% arrange(-ss) %>% head(10)
+
+```
+
+show neighborhood
+
+```{r}
+g1 <- g
+selected <- which(V(g1)$name == "Muggia")
+nbh<-make_ego_graph(
+  g1,
+  order = 1,
+  nodes = selected,
+  mode = "all",
+  mindist = 0
+)[[1]]
+
+lo = layout.graphopt(nbh)
+plot(nbh, vertex.size = strength(nbh)/500, edge.width = E(nbh)$weight/200, vertex.label = NA, layout = lo)
+plot(nbh, vertex.size = strength(nbh)/500, edge.width = E(nbh)$weight/200,layout = lo)
+
+```
+
+```{r}
+file_name = "mobility_fvg_sample_01.graphml"   
+g %>% igraph::write_graph(file_name, format="graphml")
+
+     
+```
+
+# Exploring network features
+
+to do:
+
+-   distribution of weights
+
+-   centrality measures: degree, strength, coreness
+
+```{r}
+V(g)$str<-strength(g)
+df<- data.frame(n = V(g)$name, str = round(strength(g),1))
+df <- df %>% arrange(-str) 
+df %>% head(10)
+```
+
+```{r}
+
+```
+
+-   show graph with a layout that is using geographical coordinates LAT
+    LON nrmalized to range -1,1
+
+-   show ego-subgraph of some locations
+
+-   igraph plots: reduce the white area around the plot

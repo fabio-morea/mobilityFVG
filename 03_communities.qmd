@@ -1,13 +1,27 @@
 ---
 title: "Exploring mobility dynamics in FVG - part 3: communities"
 author: "Fabio Morea"
-format: html
+format: pdf
 editor: visual
 ---
 
 ## 
 
 # introduction
+
+Our research on mobility flows aims at partitioning the regional
+territory into smaller areas, striking a balance between granularity and
+practicality. Ideally, we want to identify a moderate number of areas
+that are neither excessively small nor overly large. For instance,
+having just one or two areas would be of little interest, while having
+over 50 areas would complicate interpretation and implementation.
+Therefore, we aim for a partition that yields a manageable number of
+areas, perhaps between 3 and 50, enabling us to gain meaningful insights
+into the interconnectedness of our territory while maintaining
+practicality for analysis and decision-making.
+
+This challenge will be tackled through *network analysis*, specifically
+as a *community detection* problem.
 
 The primary goal of this notebook is to establish a methodology for
 partitioning the set of locations into distinct *communities*.
@@ -20,6 +34,9 @@ flows are encoded in a weighted undirected network. Here the nodes
 correspond to locations and the edges represent mobility flows. The
 weight of each edge represents the average daily movement of individuals
 between locations A and B within the specified time period.
+
+Our ultimate goal is to divide our regional territory into smaller areas
+based on the mobility flows between different locations.
 
 ::: callout-note
 ## coding specifications
@@ -40,12 +57,696 @@ library(communities)
 
 ```
 
-# requirements of the partition
+# A formal approach
 
-A community is
+In network analysis, a **community** is a fundamental concept referring
+to subsets of nodes within a network that exhibit a higher degree of
+interconnectedness among themselves compared to the rest of the network.
 
-COmmunities must be valid ($\mu <0.5$) and relevant (k\>1, k\<n)
+A **partition** of the network is set of non-overlapping communities,
+such that each node belongs to precisely one community. Mathematically,
+let $G = (V, E)$ represent a network where $V$ denotes the set of
+vertices (nodes) and $E$ represents the set of edges (connections)
+between the vertices. A partition of $V$ into $k$ non-overlapping
+communities can be expressed as $[ {C_1, C_2, ..., C_k} ]$ such that
+$C_i \cap C_j = \emptyset$ and $\bigcup_{i=1}^{k} = G$.
 
-A partition is
+Before exploring methods to identify an optimal partition of our
+network, it's important to address common issues:
 
-Partitions must be stable
+1.  **Trivially small (or large) communities**: When communities are
+    either too big or too small they lack meaningful insights. However,
+    single-node communities or small communities may be an intrinsic
+    feature of the network.
+
+2.  **Non-valid partitions**: Algorithms may identify communities that
+    have more external connections than internal ones, which is not
+    consistent with the definition of community. Validity should be
+    checked not only as a mean value for the whole network, but also for
+    each indvidual community.
+
+3.  **Stochastic factors**: Some algorithms introduce randomness,
+    leading to varying partitions with each run. Such variations may
+    hinder interpretation, especially if the analysis is focused on
+    single nodes (e.g. are locations A and B part of the same group?)
+    and comparison of different partiotns over time.
+
+4.  **Dependency on node ordering**: Algorithms should yield consistent
+    results regardless of node ordering, as networks are non-ordered
+    mathematical objects.
+
+Let's break down the requirements and the approach to solving this
+problem.
+
+1\. Non-overlapping and Union equals G: The partitions or communities
+identified within the network should not overlap, and collectively, they
+should cover the entire network.
+
+2\. Validity: Each partition should exhibit a higher density of
+connections within the community compared to connections with nodes
+outside the community.
+
+3\. Usefulness for analysis: The number of partitions (k) should strike
+a balance between being informative and not overwhelming. Having too few
+partitions (e.g., k=1, k=2, or k=3) might not provide enough granularity
+for analysis, while having too many partitions (k almost equal to N,
+where N is the total number of nodes) might not add significant
+information and could lead to complexity.
+
+4\. Well-distributed communities: While it's acceptable to have a giant
+community and several smaller ones, this should be justified by other
+configurations failing. Ideally, the communities should be
+well-distributed in terms of size and should capture different aspects
+or clusters within the network.
+
+Given these criteria, the problem of identifying the best partition
+involves searching for configurations that satisfy these constraints and
+then ranking them based on a suitable index. This allows us to explore
+different numbers of communities and strike a balance between
+informativeness and simplicity.
+
+Approach:
+
+1\. Community Detection Algorithms: Utilize community detection
+algorithms such as Walktrap to partition the network into communities.
+The result is a dendrogram that can be cut at different \$k\$
+,originating alternative partitions (that are consistent to each other).
+This allows us to explore different numbers of communities and strike a
+balance between informativeness and simplicity. The next step is to
+check if results are \*stable\*, partitions are all \*valid\*, and
+\*rank\* them.
+
+2\. Sensitivity Analysis: Perform sensitivity analysis to assess the
+robustness of the chosen partition(s) to variations in parameters and
+algorithms. This ensures that the identified partition(s) are not overly
+dependent on specific choices. Check if results are stable with respect
+to network shuffling and steps WT(g,s). If unstable, use CCD and
+calculate uncertainty coefficient gamma.
+
+3\. Evaluation Metrics: Define an evaluation metric or index that
+captures the fuzziness of the partitions. Mixing Parameter of the wole
+network is a good choice: quantify the quality of the partitions based
+on cohesion within communities and separation between communities.
+Caculate also mixin parameter of each community: a partition is valid if
+ALL of its communities have a valid mixing parameter
+
+4\. Ranking: Rank the partitions based on the evaluation metric chosen.
+Select the partition(s) with the highest score, indicating the best
+balance between validity, usefulness, and distribution of communities.
+
+By following this approach, we can systematically identify and rank
+partitions in the network G based on the specified constraints,
+ultimately selecting the most suitable partition(s) for analysis.
+
+# Load network and explore main features
+
+Loading the data to a network $g$. NOTA non è pesato!!!!!!!!!!!!!!!!
+
+```{r}
+file_name = "mobility_fvg_sample_01.graphml"   
+g = igraph::read_graph(file_name, format="graphml")
+V(g)$str<-strength(g)
+print(g)
+
+```
+
+Plot the network using Longitide and Latitude as coordinates
+
+`{# {r} # locs <- read_csv('./data/locations.csv') %>%  #   left_join(commdf) %>%  #     filter(!is.na(comm)) # lon_lat = cbind(locs$LON, locs$LAT) #  # plot(g,vertex.label = NA, layout = lon_lat, vertex.size = sqrt(V(g)$str)/10)`
+
+# Communities - a simple approach
+
+as first test we identify communities using infomap. The result is a
+*igraph community object*
+
+```{r}
+#comms <- infomap.community(g)
+#comms <- walktrap.community(g)
+comms <-  cluster_louvain(g,resolution = 1.2)
+#comms <-  cluster_leiden(g,resolution = 1.2)
+#comms <-  label.propagation.community(g)
+ 
+table(comms$membership)
+
+commdf <- data.frame(loc = comms$name, comm = comms$membership)
+#commdf %>% head(10)
+
+
+```
+
+Results can be saved as a csv file, and passed on to other types of
+analysis.
+
+```{r}
+commdf %>% write_csv('communities_tmp.csv')
+```
+
+# stability of results
+
+```{r}
+# function: Bootstrap approach to compare pairs of columns
+bootstrap_similarity_scores <- function(M, nn) {
+    similarity_scores <- replicate(nn, {
+        sampled_columns <- sample(ncol(M), replace = TRUE)
+        igraph::compare(M[, sampled_columns[1]], 
+                        M[, sampled_columns[2]], 
+                        method = "nmi")})
+    return(similarity_scores)
+}
+```
+
+```{r}
+n_iterations = 100
+M <- matrix(NA, nrow = vcount(g), ncol = n_iterations)
+for (i in 1:n_iterations) {
+    gs <-igraph::permute(g, sample(vcount(g)))   
+    memberships <- igraph::cluster_louvain(gs)$membership
+    M[, i] <- memberships[ match(V(g)$name, V(gs)$name) ]
+}
+sim_score <- bootstrap_similarity_scores(M, 2000)
+ggplot() +
+        geom_histogram(aes(x = sim_score), 
+                       bins = 30, 
+                       fill = "skyblue", color = "black", alpha = 0.7) +
+        labs(title = "walktrap - repeated iterations - single - shuffled",
+             x = "similarity (NMI)", y = "Frequency") +
+        theme_minimal()
+```
+
+Walktrap is very stable but offers 5 large comms
+
+```{r}
+n_iterations = 200
+M <- matrix(NA, nrow = vcount(g), ncol = n_iterations)
+for (i in 1:n_iterations) {
+    gs <-igraph::permute(g, sample(vcount(g)))  
+    memberships <- igraph::walktrap.community(gs, steps = 3)$membership
+    sortedvids <-  match(V(g)$name, V(gs)$name)
+    stopifnot(V(g)$name == V(gs)$name[sortedvids] )
+    M[, i] <- memberships[ sortedvids ]
+}
+sim_score <- bootstrap_similarity_scores(M, 5000)
+table(sim_score)
+table(memberships)
+# ggplot() +
+#         geom_histogram(aes(x = sim_score), 
+#                        bins = 30, 
+#                        fill = "darkgreen", color = "black", alpha = 0.7) +
+#         labs(title = "walktrap - repeated iterations - single - shuffled",
+#              x = "similarity (NMI)", y = "Frequency") +
+#         theme_minimal()
+```
+
+```{r}
+n_iterations = 10
+M <- matrix(NA, nrow = vcount(g), ncol = n_iterations)
+for (i in 1:n_iterations) {
+    gs <-igraph::permute(g, sample(vcount(g)))   
+    memberships <- igraph::infomap.community(gs, 
+                                             nb.trials = 20)$membership
+    M[, i] <- memberships[ match(V(g)$name, V(gs)$name) ]
+}
+sim_score <- bootstrap_similarity_scores(M, 2000)
+table(sim_score)
+ggplot() +
+        geom_histogram(aes(x = sim_score), 
+                       bins = 30, 
+                       fill = "skyblue", color = "black", alpha = 0.7) +
+        labs(title = "walktrap - repeated iterations - single - shuffled",
+             x = "similarity (NMI)", y = "Frequency") +
+        theme_minimal()
+```
+
+stability with infomap
+
+```{r}
+n_iterations = 100
+M <- matrix(NA, nrow = vcount(g), ncol = n_iterations)
+for (i in 1:n_iterations) {
+    gs <-igraph::permute(g, sample(vcount(g)))   
+    memberships <- igraph::infomap.community(gs)$membership
+    M[, i] <- memberships[ match(V(g)$name, V(gs)$name) ]
+}
+sim_score <- bootstrap_similarity_scores(M, 1000)
+ggplot() +
+        geom_histogram(aes(x = sim_score), 
+                       bins = 30, 
+                       fill = "skyblue", color = "black", alpha = 0.7) +
+        labs(title = "INFOMAP -  repeated iterations - single - shuffled",
+             x = "similarity (NMI)", y = "Frequency") +
+        theme_minimal()
+```
+
+```{r}
+
+```
+
+# test with CCD
+
+check similarity with CCD, shuffle == FLASE (s
+
+```{r}
+n_iterations = 10
+M <- matrix(NA, nrow = vcount(g), ncol = n_iterations)
+U <- matrix(NA, nrow = vcount(g), ncol = n_iterations)
+
+for (i in 1:n_iterations) {
+    print(i)
+    commsCCD<- CCD::consensus_community_detection(g, 
+                                              method = "IM",
+                                              shuffle = FALSE,
+                                              p = 0.6, 
+                                              q = 0.0, 
+                                              group = FALSE, 
+                                              t = 100)
+    M[, i] <- commsCCD$membership
+    U[, i] <- commsCCD$gamma %>% round(3)
+}
+print("Done :-D")
+sim_score <- bootstrap_similarity_scores(M, 1000)
+ggplot() + theme_minimal()+
+        geom_histogram(aes(x = sim_score), 
+                       bins = 30, 
+                       fill = "green", color = "black", alpha = 0.7) +
+        labs(title = "Similarity across repeated iterations, not shuffled, q = 0.0",
+             x = "similarity (NMI)", y = "Frequency") 
+```
+
+use parameter q to improve stability: the consensus algorithm operates
+on the most similar results (10%); the others (90%) are ignored.
+
+```{r}
+n_iterations = 10
+M <- matrix(NA, nrow = vcount(g), ncol = n_iterations)
+U <- matrix(NA, nrow = vcount(g), ncol = n_iterations)
+
+for (i in 1:n_iterations) {
+    print(i)
+    commsCCD<- CCD::consensus_community_detection(g, 
+                                              method = "IM",
+                                              shuffle = FALSE,
+                                              p = 0.6, 
+                                              q = 0.9, 
+                                              group = FALSE, 
+                                              t = 100)
+    M[, i] <- commsCCD$membership
+    U[, i] <- commsCCD$gamma %>% round(3)
+}
+print("Done :-D")
+sim_score <- bootstrap_similarity_scores(M, 1000)
+ggplot() + theme_minimal()+
+        geom_histogram(aes(x = sim_score), 
+                       bins = 30, 
+                       fill = "green", color = "black", alpha = 0.7) +
+        labs(title = "Similarity across repeated iterations, not shuffled, q = 0.9",
+             x = "similarity (NMI)", y = "Frequency") 
+```
+
+check similarity with CCD, shuffle == TRUE
+
+```{r}
+n_iterations = 10
+Ms <- matrix(NA, nrow = vcount(g), ncol = n_iterations)
+Us <- matrix(NA, nrow = vcount(g), ncol = n_iterations)
+
+for (i in 1:n_iterations) {
+    print(i)
+    commsCCD<- CCD::consensus_community_detection(g, 
+                                              method = "IM",
+                                              shuffle = TRUE,
+                                              p = 0.6, 
+                                              q = 0.9, 
+                                              group = FALSE, 
+                                              t = 100, 
+                                              IMtrials = 10)
+    Ms[, i] <- commsCCD$membership
+    Us[, i] <- commsCCD$gamma %>% round(3)
+}
+print("Done :-D")
+sim_score <- bootstrap_similarity_scores(Ms, 100)
+ggplot() + theme_minimal()+
+        geom_histogram(aes(x = sim_score), 
+                       bins = 30, 
+                       fill = "red", color = "black", alpha = 0.7) +
+        labs(title = "Similarity across repeated iterations, q = 0.9",
+             x = "NMI Value", y = "Frequency")
+```
+
+This set of parameters provides a single stable solution (consequently,
+uncertainty coefficient is 0);\
+This solution is not affected by order bias, as we shuffle the dataset
+at each iteration\
+
+There are 9 communities (altough not all communities are compliant with
+the requirement of having more internal flow than external)
+
+```{r}
+n_iterations = 10
+Ms <- matrix(NA, nrow = vcount(g), ncol = n_iterations)
+Us <- matrix(NA, nrow = vcount(g), ncol = n_iterations)
+
+for (i in 1:n_iterations) {
+    print(i)
+    commsCCD<- CCD::consensus_community_detection(g, 
+                                              method = "IM",
+                                              shuffle = TRUE,
+                                              p = 0.6, 
+                                              q = 0.9, 
+                                              group = FALSE, 
+                                              t = 500,
+                                              IMtrials = 10)
+    Ms[, i] <- commsCCD$membership
+    Us[, i] <- commsCCD$gamma %>% round(3)
+}
+print("Done :-D")
+table(commsCCD$membership)
+sim_score <- bootstrap_similarity_scores(Ms , 1000)
+table(sim_score)
+ggplot() + theme_minimal()+
+        geom_histogram(aes(x = sim_score), 
+                       bins = 30, 
+                       fill = "blue", color = "black", alpha = 0.7) +
+        labs(title = "Similarity across repeated iterations, t = 1000, q = 0.9",
+             x = "NMI Value", y = "Frequency")
+
+```
+
+Now we have a stable set of communities, and each node is associated to
+a coefficeint of uncertainty.
+
+```{r}
+
+commsCCD<- CCD::consensus_community_detection(g, 
+                                              method = "IM",
+                                              shuffle = TRUE,
+                                              p = 0.6, 
+                                              q = 0.9, 
+                                              group = FALSE, 
+                                              t = 500,
+                                              IMtrials = 10)
+commdf <- data.frame(loc = commsCCD$name, 
+                     comm = commsCCD$membership,
+                     u = commsCCD$gamma)
+table(commdf$u)
+#commdf %>% head(10)
+commdf %>% write_csv('communities_stable.csv')
+
+
+E(g)$w <- E(g)$weight  
+V(g)$community <-  communities::comm_label_as_strongest(g, comms)
+gc <- communities::make_community_network(g)
+plot(gc, 
+     layout = layout.graphopt(gc), 
+     vertex.shape = "square", 
+     vertex.color = as.factor(V(gc)$name),
+     edge.width = log(E(gc)$weight/50),
+     #vertex.size = V(g)$str/2000,
+     margin= -0.1)
+
+
+```
+
+# Example of use: plotting communities
+
+```{r}
+
+commsWT <- igraph::walktrap.community(g) 
+commdf <- data.frame(loc = commsWT$name, 
+                     comm = commsWT$membership )
+
+locs <- read_csv('./data/locations.csv') %>% 
+  left_join(commdf) %>% 
+    filter(!is.na(comm))
+locs %>%
+  ggplot(aes(x = LON, y = LAT)) +
+  geom_point(aes(size = sqrt(V(g)$str)/10, color = factor(comm)), alpha = 0.5) +  
+  theme_minimal() +
+theme(legend.position = 'bottom')+
+  theme(aspect.ratio = 1)+
+  ggtitle("Communities on a map (size: str)") 
+
+locs %>%
+  ggplot(aes(x = LON, y = LAT)) +
+  geom_point(aes(size = km2, color = factor(comm)), alpha = 0.5) +  
+  theme_minimal() +
+theme(legend.position = 'bottom')+
+  theme(aspect.ratio = 1)+
+  ggtitle("Communities on a map (size: km2)") 
+
+locs %>%
+  ggplot(aes(x = LON, y = LAT)) +
+  geom_point(aes(size = (V(g)$str)/10, color = factor(comm)), alpha = 0.5) +  
+  #geom_text(aes(label = loc), nudge_y = 0.1) + # Add annotations
+  theme_minimal() +
+theme(legend.position = 'bottom')+
+  theme(aspect.ratio = 1)+
+  ggtitle("Locations on a map")+
+  
+  facet_wrap(~ comm, scales = 'free')
+
+
+```
+
+we can assign each community a name that recalls that of its strongest
+member. Plot communities coloured and separated using
+communities::layout_distance_comm
+
+to do: avoid printig comm names; avoid names(mmm)\<- V(g)\$name
+
+```{r}
+V(g)$community <- comms$membership
+V(g)$clabels <- communities::comm_label_as_strongest(g, comms)
+print(unique(V(g)$clabels))
+```
+
+```{r}
+mmm <- comms$membership
+names(mmm)<- V(g)$name
+lo = layout.fruchterman.reingold(g,
+     weights = communities::layout_distance_comm(g, mmm, eps=.1))
+ 
+plot(g, 
+     layout = lo, 
+     vertex.label = NA,
+     vertex.size = sqrt(V(g)$str)/20,
+     vertex.color = V(g)$community, 
+     edge.color = 'lightgray',
+     margin = -.1,
+     asp = 0.35)
+```
+
+we can plot each community separately:
+
+```{r}
+ 
+list_comms = unique(comms$membership)
+for (c in list_comms){
+  gcom <- igraph::induced.subgraph(g, vids = V(g)$community == c )
+  plot(gcom, 
+     layout = layout_in_circle(gcom), 
+     vertex.label = V(gcom)$name,
+     vertex.size = sqrt( V(gcom)$str )/5,
+     edge.color = 'lightgray',
+     edge.width = E(g)$weight/100,
+     main = paste("Community ", V(gcom)$clabels[1]))
+}
+```
+
+to do:
+
+# A network of communities
+
+communities as squares, placed in the coordinates of the main city
+
+to do: improve communities::make_community_network\
+so that weight and community names can be passed as parameters
+
+```{r}
+
+E(g)$w <- E(g)$weight  
+V(g)$community <-V(g)$clabels
+gc <- communities::make_community_network(g)
+gc
+```
+
+```{r}
+#| label: plot graph
+#| layout-ncol: 2
+#| fig-cap: 
+#|   - "Line Plot 1"
+#|   - "Line Plot 2"
+
+ 
+plot(gc, 
+     layout = layout.circle(gc), 
+     vertex.shape = "square", 
+     vertex.color = as.factor(V(gc)$name),
+     edge.width = log(E(gc)$weight/50),
+     margin= -0.1)
+```
+
+## check stability
+
+```{r}
+t = 100
+M <- matrix(NA, nrow = vcount(g), ncol = t)
+for (i in 1:t) {M[, i] <- igraph::infomap.community(g)$membership}
+
+M1 <- matrix(NA, nrow = vcount(g), ncol = t)
+for (i in 1:t) {M1[, i] <- igraph::cluster_louvain(g)$membership}
+
+```
+
+```{r}
+library(aricode)
+# Bootstrap approach to compare pairs of columns
+bootstrap_iterations <- 1000
+bootstrap_stability <- function(bootstrap_iterations, M) {
+  nmi_values <- replicate(bootstrap_iterations, {
+    sampled_columns <- sample(ncol(M), replace = TRUE)
+    igraph::compare(M[, sampled_columns[1]], M[, sampled_columns[2]], method = "nmi")
+  })
+  
+  ggplot() +
+    geom_histogram(aes(x = nmi_values), bins = 30, fill = "skyblue", color = "black", alpha = 0.7) +
+    labs(title = "Distribution of Normalized Mutual Information (NMI)",
+         x = "NMI Value",
+         y = "Frequency") +
+    theme_minimal()
+}
+
+bootstrap_stability(bootstrap_iterations = 1000, M)
+
+bootstrap_stability(bootstrap_iterations = 1000, M1)
+
+```
+
+Infomap is more stable than louvain.
+
+now check which nodes are more unstable
+
+```{r}
+n = vcount(g)
+D <- matrix(0, nrow = n, ncol = n)
+rownames(D) <- V(g)$name
+
+# Nested for loops to iterate over each pair of nodes
+for (i in 1:(n - 1)) {
+  for (j in (i + 1):n) {
+    # Count how many times nodes i and j are in the same community across all iterations
+    count <- sum(M[i,] == M[j,])
+    # Store the count in the D matrix
+    D[i, j] <- count
+    D[j, i] <- count  # Since the pairs are symmetric
+  }
+}
+D<- D/t
+D[ D==0 ] <- NA
+df <- data.frame(name = rownames(D), 
+                 s = round(rowMeans(D, na.rm = TRUE),2))
+
+
+df %>% filter(s==1) %>% print
+df %>% filter(s>=0.5 & s <1) %>% print()
+df %>% filter(s<0.5) %>% print()
+
+
+hist(df$s)
+```
+
+```{r}
+
+# # Define function to fit 4-point beta distribution
+# fit_beta_distribution <- function(data) {
+#   require(VGAM)
+#   # Fit beta distribution with 4 points
+#   fit <- vglm(data ~ 1, betabinomial, trace = TRUE, crit = "coef")
+#   return(fit)
+# }
+# # Identify names with s <= 0.3
+# names_below_threshold <- df$name[df$s <= 0.5]
+# 
+# # Initialize a list to store the column indices of D greater than 0 for each name
+# columns_greater_than_zero <- list()
+# 
+# # Iterate over each name below the threshold
+# for (name in names_below_threshold) {
+#   # Get the row index of the name
+#   row_index <- which(rownames(D) == name)
+#   # Get column indices where values are greater than 0
+#   columns <- which(D[row_index, ] > 0)
+#   # Store the result
+#   DD <- D[ row_index, columns]
+#   print(paste(name, mean(DD)))
+#   print("Names of columns with values greater than 0:")
+#   #print(rownames(D)[columns])
+#   
+# }
+# 
+# 
+# 
+# # Fit beta distribution to DD
+# fit <- fit_beta_distribution(DD)
+# 
+# # Print summary of the fitted distribution
+# summary(fit)
+
+ 
+```
+
+## check mixing parameter
+
+```{r}
+edges_gc<-as_long_data_frame(gc) %>%
+    select(from_name, to_name, weight) %>% 
+    mutate(intra_weight = if_else(from_name == to_name, 0,weight )) %>%
+    mutate(self_weigth = if_else(from_name == to_name, weight, 0 )) %>%
+    arrange(-weight)
+
+# mixing parameter of the partition
+mu = sum(edges_gc$intra_weight)/sum(edges_gc$weight)
+print(edges_gc)
+print(mu)
+
+```
+
+validate for each community: internal connections must be larger than
+external
+
+```{r}
+
+names <- unique(c(edges_gc$from_name, edges_gc$to_name))
+
+
+ comm_df <- tibble(name = names) %>%
+  mutate(total_weight = map_dbl(name, 
+      ~ sum(edges_gc$weight[edges_gc$from == .x | edges_gc$to == .x])))%>%
+  mutate(intra_weight = map_dbl(name, 
+      ~ sum(edges_gc$intra_weight[edges_gc$from == .x | edges_gc$to == .x])))%>%
+     mutate(self_weight = total_weight - intra_weight) %>%
+     mutate(x = self_weight / intra_weight) %>%
+     mutate(valid = (self_weight > intra_weight))%>%
+  arrange(-total_weight)
+
+ print(comm_df %>% filter(valid == TRUE))
+ print(comm_df %>% filter(valid == FALSE))
+
+```
+
+some communities are not valid! this is not a good partition.
+
+```{r}
+comm_df %>% ggplot(aes(y = name, x = total_weight, fill = as.factor(valid)))+ 
+    geom_col()+
+    geom_vline(xintercept = 0.5, linetype = "dashed", color = 'red')
+```
+
+```{r}
+comm_df %>% ggplot(aes(x = self_weight, y = intra_weight, fill = as.factor(valid)))+ 
+    geom_point(aes(size = total_weight, color = as.factor(valid)))+
+    geom_abline(intercept = 0.0, slope = 1, linetype = "dashed", color = 'red')+
+  scale_x_log10()+ scale_y_log10()
+```
+
+to do: - check stability over repeated trials - check input ordering
+bias

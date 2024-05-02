@@ -41,7 +41,8 @@ requires cleaning for analysis. Tasks include:
 -   Derive categorical variables from the 'type' column, simplifying
     them into more efficient categories such as 'inbound' and 'outbound'
 
--   Set appropriate date format, and calculate weekday (1 = Monday)
+-   Set appropriate date format, and calculate weekday (1 = Monday) and
+    Month (1 to 12).
 
 -   Eliminating unnecessary columns.
 
@@ -63,10 +64,9 @@ Data sources for this notebook
 
 ```{r}
 input_files <- c('./data/EXPORT FVG _ 6-10 MARZO 2023.xlsx',
-                 './data/EXPORT FVG _ 11-15 MARZO 2023.xlsx')
-
-                 #'./data/EXPORT FVG _ 1-5 GIUGNO 2023.xlsx',
-                 #'./data/EXPORT FVG _ 6-10 GIUGNO 2023.xlsx'
+                  './data/EXPORT FVG _ 11-15 MARZO 2023.xlsx',
+                  './data/EXPORT FVG _ 1-5 GIUGNO 2023.xlsx',
+                  './data/EXPORT FVG _ 6-10 GIUGNO 2023.xlsx')
 
 ```
 
@@ -110,25 +110,31 @@ read_and_clean <- function(df,
   
   #remove special characters such as ò, à ...
   mutate(across(where(is.character), ~ gsub("[^a-zA-Z0-9\\s]", " ", .))) %>%
-  
-  #set appropriate format for Day and get weekday
-  mutate(day = as.Date(day, format = "%d-%m-%Y")) %>%
-  mutate(weekday = as.numeric(format(day, "%u"))) %>%
-  
-  # encode direction as inbound or outbound
-  mutate(direction = case_when(
-    grepl("di ritorno da altro Comune", type) ~ "inbound",
-    grepl("diretto in altro Comune", type) ~ "outbound",
-    TRUE ~ "--")) %>%
-  
-  # encode type of traveller
+
+  # encode and filter type of traveller
   mutate(res_trav = case_when(
     grepl("Residente", type) ~ "resident",
     grepl("Viaggiatore", type) ~ "traveller",
     TRUE ~ "--")) %>%
-      select(-type)
+
       
-     return(df) 
+  # encode direction and resident_in / connected_with
+  mutate(direction = case_when(
+    grepl("di ritorno da altro Comune", type) ~ "back",
+    grepl("diretto in altro Comune", type) ~ "go",
+    TRUE ~ "--")) %>%
+      
+  mutate(resident_in = if_else(res_trav =="traveller", "--", 
+                       if_else(direction == "go",origin, destination))) %>%
+  mutate(connected_with = if_else(res_trav =="traveller", "--", 
+                        if_else(direction == "go", destination, origin)))%>%
+
+      #set appropriate format for Day and get weekday
+  mutate(day = as.Date(day, format = "%d-%m-%Y")) %>%
+  mutate(weekday = as.numeric(format(day, "%u"))) %>%
+  mutate(month = month(day)) %>%
+  select(day, weekday, month, origin, destination, resident_in, connected_with, direction, res_trav, n)
+  return(df) 
 }
 
 ```
@@ -143,88 +149,21 @@ for (filename in input_files){
     if( all(column_names == colnames(df)) ){ 
         print("Colnames are OK, adding data.")
         data <- rbind(data, 
-                      read_and_clean(df, 
-                                     selected_cols,
-                                     new_column_names))
+                      read_and_clean(df, selected_cols, new_column_names))
     } else {
         print("Column names do not match: skipping this file!")
+        print(colnames(df))
     }
-    
-    
 }
-
-```
-
-```{r}
 glimpse(data, width = 60)
 
 ```
 
-### filter only residents
+# Add location info and short names
 
-```{r}
-data <- data %>%     
-    filter(res_trav == "resident") 
-glimpse(data, width = 60)
-```
-
-### check time frame
-
-```{r}
-data %>% ggplot(aes(x = day)) + 
-  geom_histogram(binwidth = 1, fill = "skyblue", color = "black") +
-  labs(title = "Distribution of Day", x = "Day", y = "Frequency")
-```
-
-## check locations
-
-```{r}
-max_n <- max(data$n)
-
-locations <- data %>%
-  group_by(origin) %>%
-  summarize(y = sum(n) ) %>%
-  arrange(-y)
-
-```
-
-top 20
-
-```{r}
-# Selecting top 20 locations
-top_locations <- head(locations, 20)
-
-# Creating the horizontal column plot
-ggplot(top_locations, aes(x = reorder(origin, -y), y = y)) +
-  geom_col() +
-  labs(title = "Top 20 Locations by y",
-       x = "Origin",
-       y = "Y") +
-  theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1))
-
-```
-
-last 20
-
-```{r}
-locations %>% 
-    tail(20)%>%
-    ggplot(aes(x = reorder(origin, -y), y = y)) +
-  geom_col() +
-  labs(title = "Top 20 Locations by y",
-       x = "Origin",
-       y = "Y") +
-  theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1))
-
-```
-
-## Improve information on locations
-
-This section aims to enrich the data on the *origin* and *destination*
-with latitude, longitude, area, and province according to the ISTAT data
-on *comuni*.
+This section aims to establish short location names, and enrich the data
+on the *origin* and *destination* with latitude, longitude, area, and
+province according to the ISTAT data on *comuni*.
 
 We must take into account that some locations in the dataset are
 composed of two *comuni*, hence we need to summarize the information:
@@ -239,13 +178,11 @@ composed of two *comuni*, hence we need to summarize the information:
 comuni<-read_excel('./data/comuniFVG.xlsx') %>%
     arrange(location, nome)
 
-
-
-#check duplicates
+#check duplicates ie locations
 duplicate_locations <- comuni %>%
-  group_by(location) %>%
+  group_by(location) %>% 
     arrange(location)%>%
-  filter(n() > 1)
+  filter(n() > 1) 
 
 print(duplicate_locations)
 
@@ -267,31 +204,176 @@ locs <- comuni %>%
 ```
 
 ```{r}
-tmp <- locs %>% select(location, loc)
-data <- data %>%
-  left_join(tmp, by = c("origin" = "location")) %>%
-  select(-origin) %>%
-  rename(origin = loc) %>%
-  left_join(tmp, by = c("destination" = "location")) %>%
-  select(-destination) %>%
-  rename(destination = loc) 
+tmp <- locs %>% select(location, loc) 
+
+data <- data %>% ungroup() %>%
+    left_join(tmp, by = c("resident_in" = "location")) %>%
+    left_join(tmp, by = c("connected_with" = "location")) %>%  
+    select(-connected_with) %>% 
+    rename(connected_with = loc.y) %>%
+    select(-resident_in) %>% 
+    rename(resident_in = loc.x)
+
+#   rename(destination = loc) 
 ```
 
 ```{r}
 
-# check that comuni contains a row for each location
-length(locations$origin) == length(locs$location)
+length(unique(c( data$resident_in, data$connected_with )))
 
-all( sort(locations$origin) == sort(locs$location) )
+```
+
+Check data: some locations are still fragmented in several "Area di
+Censimento"
+
+```{r}
+check_n<-function(df, where_from, where_to, when){
+  df %>%
+    filter(resident_in == where_from)%>%
+    filter(connected_with == where_to)%>%
+    filter(day == when) %>%
+        return()
+}
+
+check_n(data, "Trieste", "Muggia", as.Date("2023-03-10"))
+check_n(data, "Cervignano", "Muggia", as.Date("2023-03-10"))
+
+```
+
+# compute resident_in and connected with
+
+```{r}
+data <- data %>%
+ 
+```
+
+# filter only residents
+
+```{r}
+data <- data %>%     
+    filter(res_trav == "resident") 
+glimpse(data, width = 60)
+```
+
+# aggregate by location
+
+Some locations are divided in "Area di censimento". For the purpose of
+our analysis, we aggreagate with sum(n)
+
+```{r}
+      
+data<-data %>%
+  group_by(day, origin, destination, resident_in, connected_with, direction, res_trav, weekday, month, n)%>%
+  summarize(n = sum(n), .groups = "drop") 
+glimpse(data, width = 60)
+
+```
+
+## calculate mean flow per day
+
+Flows are aggregated as mean(n), grouped by edge, i.e. by resident_in
+and connected_with\
+
+```{r}
+
+data<- data %>%
+    group_by(day, weekday, month, resident_in, connected_with)%>%
+    summarize(flow = mean(n, na.rm = TRUE), .groups = "drop") 
+ glimpse(data, width = 60)
+
+```
+
+Each pair of locations is associated with 4 flows\
+direction is encoded as 'resident_in - connected_with'
+
+```{r}
+samplelocs <- c("Grado" , "Trieste")
+data %>% 
+    select(day, resident_in, connected_with, flow)%>%
+    filter(day == as.Date("2023-06-02")) %>%
+    filter(resident_in %in% samplelocs & connected_with %in% samplelocs) %>%
+    arrange(day, origin) %>%head(8)
+ 
+ 
+
+```
+
+### check time frame
+
+```{r}
+plot_ab_flow<- function(df, a,b,ymax=NA){
+    title = paste("Residents in", a, "moving to and from", b)
+    
+    p<- df %>% 
+        filter(resident_in == a & connected_with == b )%>% 
+        mutate(weekend = if_else(weekday>5,"holiday", "working"))%>%
+        ggplot(aes(x = day, y = flow, fill = weekend)) + 
+        geom_col() +
+        labs(title = title, x = "Day", y = "flow") +     
+        facet_grid(~month, scales = "free_x")+
+        theme_light()
+    
+    if(!is.na(ymax)){p <- p+  ylim(0,ymax)}
+    return(p)
+}
+grid.arrange(
+    plot_ab_flow(data, "Trieste", "Grado", ymax = 150), 
+    plot_ab_flow(data, "Grado", "Trieste", ymax = 150))
+
+```
+
+```{r}
+grid.arrange(
+    plot_ab_flow(data, "Trieste", "Staranzano"), 
+    plot_ab_flow(data, "Staranzano", "Trieste"))
+```
+
+## check locations
+
+```{r}
+locations <- data %>% filter(month==6)%>%
+  group_by(resident_in) %>%
+  summarize(y = sum(flow), .groups = "drop" ) %>%
+  arrange(-y)
+
+# Selecting top 20 locations
+top_locations <- head(locations, 20)
+
+# Creating the horizontal column plot
+ggplot(top_locations, aes(x = reorder(resident_in, -y), y = y)) +
+  geom_col() +
+  labs(title = "Top 20 Locations by y",
+       x = "Origin",
+       y = "Y") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) 
+```
+
+```{r}
+ 
+
+```
+
+last 20
+
+```{r}
+locations %>% 
+    tail(20)%>%
+    ggplot(aes(x = reorder(origin, -y), y = y)) +
+  geom_col() +
+  labs(title = "Top 20 Locations by y",
+       x = "Origin",
+       y = "Y") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
 ```
 
 # Saving data to csv
 
 ```{r}
-data %>%  write_csv('./data/flows.csv')
-locs %>% select(-location) %>%
-    write_csv('./data/locations.csv')
+data %>% write_csv('./data/flows.csv')
+locs %>% write_csv('./data/locations.csv')
 ```
 
 # Data exploration
@@ -304,14 +386,19 @@ locs <- read_csv('./data/locations.csv')
 ```
 
 ```{r}
-tmp <- flows %>%
-  group_by(origin) %>%
-  summarize(s = sum(n)) %>%
-  rename(loc = origin)
+unique(c(data$resident_in, data$connected_with))
+ 
+```
 
-locs <- locs %>% left_join(tmp) 
+```{r}
+tmp <- flows %>% filter(month == 3) %>%
+  group_by(connected_with) %>%
+  summarize(s = sum(flow), .groups = "drop") %>%
+  rename(loc = connected_with)
 
-plot_points <- locs %>%
+locs1 <- locs %>% left_join(tmp) 
+
+plot_points <- locs1 %>%
   ggplot(aes(x = LON, y = LAT)) +
   geom_point(aes(size = s), color = "red", alpha = 0.5) +  
   theme_minimal() +
@@ -319,16 +406,14 @@ theme(legend.position = 'none')+
   theme(aspect.ratio = 1)+
   ggtitle("Locations on a map")
 
-top20 <- locs
-
-plot_head <- locs %>% arrange(-s) %>% head(10) %>%
-    ggplot(aes(y = reorder(loc, s), x = s)) +   
+plot_head <- locs1 %>% 
+    arrange(desc(s)) %>%
+    head(10) %>%
+    ggplot(aes(y = loc, x = s)) +   
     geom_col(fill = 'red', alpha= 0.5) + 
     theme_minimal() + 
     theme(aspect.ratio = 2)+
     ggtitle("top 10 locations by flow")
 
-# Arrange plots in a row
-
-grid.arrange(plot_points, plot_head, ncol = 1)
+grid.arrange(plot_points, plot_head, ncol = 2)
 ```

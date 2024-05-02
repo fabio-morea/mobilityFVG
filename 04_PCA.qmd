@@ -1,0 +1,313 @@
+---
+title: "Exploring mobility dynamics in FVG - part 4: outlier detection via PCA"
+author: "Fabio Morea"
+format: pdf
+editor: visual
+---
+
+## 
+
+# introduction
+
+testing PCA: variables are the pairs origin-destination; observations
+are the weeks; values are the flows
+
+```{r}
+#| warning: false
+#| echo: false
+library(tidyverse)
+library(igraph)
+library(aricode)
+library(communities)
+
+```
+
+# 
+
+```{r}
+selectedlocs <- c("Trieste", "Udine", "Grado", "Lignano", "Monfalcone", "Gemona",  "Pordenone", "Gorizia", "Sappada", "Ravascletto")
+flows <- read_csv('./data/flows.csv',show_col_types = FALSE) %>%
+    filter(resident_in != connected_with) %>%
+   #filter(resident_in %in% selectedlocs ) %>%
+   #filter(connected_with %in% selectedlocs ) %>%
+    rename(weight = flow_mean) %>%
+    mutate(week_number = week(day)) %>%
+    mutate(ee= paste(resident_in, connected_with, sep = "_"))
+
+edges <- flows %>%
+    select(weight, day, ee) %>%
+    group_by(day, ee) %>%
+    summarize(weight = mean(weight), .groups = "drop")
+
+
+
+# df <- edges %>%  pivot_wider(names_from = ee, values_from = weight) 
+# df[is.na(df)] <- 0
+
+# rescale_to_minus_one_one <- function(x) {
+#   min_val <- min(x, na.rm = TRUE)
+#   max_val <- max(x, na.rm = TRUE)
+#   rescaled <- 2 * (x - min_val) / (max_val - min_val) - 1
+#   return(rescaled)
+# }
+scale_and_center <- function(x) {
+  min_x <- min(x, na.rm = TRUE)
+  max_x <- max(x, na.rm = TRUE)
+  scaled <- 2* (x - min_x) / (max_x - min_x) - 1
+  return(scaled)
+}
+
+X <- edges %>% pivot_wider(names_from = ee, 
+                           values_from = weight,
+                           values_fill = 0)
+
+X <- X[,-1]
+X <- scale_and_center(X)
+
+hist(unlist(X))
+
+```
+
+```{r}
+pca_result <- prcomp(X)
+hist(pca_result$x)
+
+# Print summary of PCA results
+print(summary(pca_result))
+
+plot(pca_result, type = "l", main = "Scree Plot")
+
+# Extract the principal components
+pcs <- pca_result$x
+
+
+# Print the principal components
+#print(pcs)
+
+```
+
+there are only 3 principal components!
+
+```{r}
+projection<-as.data.frame(pca_result$rotation) %>%
+    select(PC1, PC2, PC3)
+projection$ee <- rownames(projection)
+
+
+pca_result$rotation[,1] %>% hist()
+pca_result$rotation[,2] %>% hist()
+pca_result$rotation[,3] %>% hist()
+#pca_result$rotation[,4] %>% hist()
+
+pca_result$rotation[,1] %>% sort() %>% tail(4)
+pca_result$rotation[,2] %>% sort() %>% tail(4)
+
+
+pca_result$rotation[,1] %>% sort() %>% head(4)
+pca_result$rotation[,2] %>% sort() %>% head(4)
+
+```
+
+```{r}
+#biplot(pca_result, scale = 0, xlab=NA)
+
+```
+
+PCA is good for outlier detection we can use DBSCAN in PC space to
+detect outliers
+
+```{r}
+
+library(dbscan)
+
+Y = projection[, c("PC1", "PC2", "PC3")]
+dbscan_result <- dbscan(Y, eps = 0.04, minPts = 2)
+#ggplot()+geom_col(x=dbscan_result$cluster, y = dbscan_result$dist)
+projection$cluster <- dbscan_result$cluster
+
+cluster_freq <- as.data.frame(table(dbscan_result$cluster))
+names(cluster_freq) <- c("Cluster", "Frequency")
+ggplot(cluster_freq, aes(x = factor(Cluster), y = Frequency, fill = factor(Cluster))) +
+  geom_bar(stat = "identity") +
+  labs(title = "Size of clusters", x = "Cluster", y = "# edges in the cluster") + theme_minimal()
+
+library(gridExtra)
+
+# Plot for PC1 and PC2
+plot1 <- ggplot(projection, aes(x = PC1, y = PC2, color = factor(cluster))) +
+  geom_point() +
+  labs(x = "PC1", y = "PC2", title = "Scatterplot clusters") +
+  scale_color_discrete(name = "Cluster") +
+  theme_minimal()
+
+# Plot for PC1 and PC3
+plot2 <- ggplot(projection, aes(x = PC1, y = PC3, color = factor(cluster))) +
+  geom_point() +
+  labs(x = "PC1", y = "PC3", title = "Scatterplot clusters") +
+  scale_color_discrete(name = "Cluster") +
+  theme_minimal()
+
+# Arrange plots side by side
+grid.arrange(plot1, plot2, ncol = 2)
+
+```
+
+# check members of each cluster
+
+```{r}
+flows1 <- merge(flows, projection, , by = "ee", all.x = TRUE) %>%
+  select(resident_in, connected_with, ee, weight, day, cluster) %>%
+    group_by(resident_in, connected_with,ee, day, cluster) %>%
+    summarize(weight = mean(weight), .groups = "drop")
+
+for (i in 0:max(flows1$cluster)){
+    tmp <- flows1 %>% 
+        filter(cluster == i) 
+    print(paste("cluster and size: ",i, nrow(tmp), 
+                round(mean(tmp$weight),3)))
+    tmp %>% ggplot()+ geom_histogram(aes(y = weight))
+}
+
+```
+
+# Che fare con OUTLIERS? analizza il loro andamento temporale, sono molto alti o ad alta varianza
+
+```{r}
+tmp <- flows1 %>% filter(cluster ==0)
+```
+
+```{r}
+g <- flows1 %>% 
+    filter(cluster >=0) %>%
+    group_by(resident_in, connected_with) %>% 
+    summarize(weight = mean(weight), .groups = "drop")%>%
+    
+      igraph::graph_from_data_frame(directed = TRUE)%>%igraph::simplify()
+
+ecount(g) # greatly reduced the number of edges: increases quality and stability
+V(g)$str <- strength(g)
+
+comms<- igraph::infomap.community(g, e.weights = E(g)$weight)
+#comms<- cluster_louvain(g, resolution = 1.2)
+V(g)$community <- comms$membership
+table(comms$membership)
+
+ lo = layout.fruchterman.reingold(g,
+      weights = communities::layout_distance_comm(g, V(g)$community, eps=.05))
+
+plot(g, 
+     layout = lo, 
+     vertex.label = NA,
+     vertex.size = sqrt(V(g)$str)/30,
+     vertex.color = V(g)$community, 
+     edge.color = 'lightgray',
+     margin = -.1,
+     asp = 0.35)
+```
+
+# check mixing parameter and validity
+
+```{r}
+
+#comms <- igraph::walktrap.community(g) 
+#comms <- igraph::cluster_fluid_communities(g, no.of.communities = 5) 
+V(g)$clabels <- communities::comm_label_as_strongest(g, comms)
+commdf <- data.frame(loc = comms$name, 
+                     comm = comms$membership )
+
+locs <- read_csv('./data/locations.csv') %>% 
+  left_join(commdf) %>% 
+    filter(!is.na(comm))
+locs %>%
+  ggplot(aes(x = LON, y = LAT)) +
+  geom_point(aes(size = sqrt(V(g)$str)/10, color = factor(comm)), alpha = 0.5) +  
+  theme_minimal() +
+theme(legend.position = 'bottom')+
+  theme(aspect.ratio = 1)+
+  ggtitle("Communities on a map (size: str)") 
+
+locs %>%
+  ggplot(aes(x = LON, y = LAT)) +
+  geom_point(aes(size = (V(g)$str)/10, color = factor(comm)), alpha = 0.5) +  
+  #geom_text(aes(label = loc), nudge_y = 0.1) + # Add annotations
+  theme_minimal() +
+theme(legend.position = 'bottom')+
+  theme(aspect.ratio = 1)+
+  ggtitle("Locations on a map")+
+  
+  facet_wrap(~ comm, scales = 'free')
+
+
+```
+
+# A network of communities
+
+communities as squares, placed in the coordinates of the main city
+
+to do: improve communities::make_community_network\
+so that weight and community names can be passed as parameters
+
+```{r}
+
+E(g)$w <- E(g)$weight  
+V(g)$community <-V(g)$clabels
+gc <- communities::make_community_network(g)
+plot(gc, 
+     layout = layout.circle(gc), 
+     vertex.shape = "square", 
+     vertex.color = as.factor(V(gc)$name),
+     edge.width = (E(gc)$weight/5000),
+     margin= -0.1)
+```
+
+## check mixing parameter
+
+```{r}
+edges_gc<-as_long_data_frame(gc) %>%
+    select(from_name, to_name, weight) %>% 
+    mutate(intra_weight = if_else(from_name == to_name, 0,weight )) %>%
+    mutate(self_weight = if_else(from_name == to_name, weight, 0 )) %>%
+    arrange(-weight) 
+# mixing parameter of the partition
+mu = sum(edges_gc$intra_weight)/sum(edges_gc$weight)
+print(edges_gc)
+print(mu)
+
+```
+
+validate for each community: internal connections must be larger than
+external
+
+```{r}
+
+names <- unique(c(edges_gc$from_name, edges_gc$to_name))
+
+
+ comm_df <- tibble(name = names) %>%
+  mutate(total_weight = map_dbl(name, 
+      ~ sum(edges_gc$weight[edges_gc$from == .x | edges_gc$to == .x])))%>%
+  mutate(intra_weight = map_dbl(name, 
+      ~ sum(edges_gc$intra_weight[edges_gc$from == .x | edges_gc$to == .x])))%>%
+     mutate(self_weight = total_weight - intra_weight) %>%
+     mutate(x = self_weight / intra_weight) %>%
+     mutate(valid = (self_weight > intra_weight))%>%
+  arrange(-total_weight)
+
+ print(comm_df %>% filter(valid == TRUE))
+ print(comm_df %>% filter(valid == FALSE))
+
+```
+
+some communities are not valid! this is not a good partition.
+
+```{r}
+comm_df %>% ggplot(aes(y = name, x = total_weight, fill = as.factor(valid)))+ 
+    geom_col()+
+    geom_vline(xintercept = 0.5, linetype = "dashed", color = 'red')
+```
+
+```{r}
+comm_df %>% ggplot(aes(x = self_weight, y = intra_weight, fill = as.factor(valid)))+ 
+    geom_point(aes(size = total_weight, color = as.factor(valid)))+
+    geom_abline(intercept = 0.0, slope = 1, linetype = "dashed", color = 'red')#+ scale_x_log10()+ scale_y_log10()
+```

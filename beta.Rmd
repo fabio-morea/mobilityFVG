@@ -51,6 +51,32 @@ beta playground
 https://www.acsu.buffalo.edu/~adamcunn/probability/beta.html
 
 ```{r}
+library(tidyverse)
+data <- read.csv('./data/flows.csv') %>%
+  select(n, month, direction, origin)%>%
+    filter(month ==3, direction == "outbound", origin == "Staranzano") %>%
+  pull(n)
+hist(data)
+p <- eBeta_ab(X=data)
+shape1 = p$shape1
+shape2 = p$shape2
+a = p$a
+b = p$b
+print(paste(a,b, shape1, shape2))
+
+x <- seq(0, 1, length.out = 100)
+
+# Calculate the probability density function (PDF) values
+pdf_values <- dbeta(x, shape1, shape2) 
+# Plot the 4-points beta distribution
+plot(a + (b-a)*x, pdf_values, type = "p", main = "4-points Beta Distribution", xlab = "x", ylab = "Density")
+plot(hist(data))
+
+mean(data)
+median(data)
+```
+
+```{r}
 # Calculate the 90th quantile interval estimate
 q = 99
 qq = (100-q)/200
