@@ -1,0 +1,720 @@
+---
+title: "Exploring solutions space"
+author: "Fabio Morea"
+format: pdf
+editor: visual
+---
+
+# *introduction*
+
+*exploring solutions space - trial #2*
+
+## *what is a "good" partition*
+
+*We want to identify a partition of G.*
+
+*Specifically we want to identify a **good** partition of G, which
+means*
+
+*Single:*
+
+-   *the number of communities is meaningful for interpretation*
+
+-   *communities are not internally disconnected,*
+
+-   *valid communities: mixing parameter 0.5 (weak: for the whole
+    network or strong for each community)*
+
+-   *stable: on repeated trials, we get always the same result (number
+    of communities, and their composition)*
+
+-   *unaffected by ordering: results do not change upon sorting (or
+    shuffling) the order of nodes and edges*
+
+-   *if there is any uncertainty, it is measured at node-level*
+
+-   *outliers can be identified (and interpreted, pruned or
+    highlighted)*
+
+*This is not trivial, indeed community detection algorithms may fail on
+one or more of the above points*
+
+## *why we need to explore solution space*
+
+*Unfortunately, just a single trial of a specific algorithm is not
+enough to understand if any (or many) of the issues mentioned above are
+present. Not to mention mitigating or removing them.*
+
+*We propose two preliminary steps for the choice of algorithm:*
+
+1.  *the algorithm is immune from the problem of internally disconnected
+    communities (i.e. avoid Louvain)*
+
+2.  *the algorithm, with appropriate parameter values, produces a
+    meaningful number of communities* $1 < k < n$
+
+*then explore stability: repeat the algorithm* $t$ *times and check how
+many solutions you get:*
+
+-   *always the same solution. That's easy, you are done.*
+
+-   *a prevalent solution (more than 50% of occurrencies). You can chose
+    the prevalent one.*
+
+-   *few solutions (all below 50%, none is prevaliling). You can chose
+    just one (eg based on modularity score or on the frequency) as
+    above. Or the most common ones (e.g. the top ones that represent at
+    least 50% of the solution space), and perform consensus.*
+
+-   *many different solutions (of the same order of* $t$*). Consensus is
+    required. You can either use the whole solution space (which
+    delivers a thorough estimate of uncertainty and outliers) or prune a
+    quantile and proceed with that.*
+
+# *example*
+
+```{r}
+#| warning: false
+#| echo: false
+library(tidyverse)
+library(readxl)
+library(igraph)
+library(dendextend)
+library(aricode)
+library(communities)
+
+require(tidygraph)
+require(ggraph)
+
+```
+
+## *Load network and explore main features*
+
+*Loading the data to a network* $g$*.*
+
+```{r}
+file_name = "mobility_fvg_sample_01.graphml"   
+g = igraph::read_graph(file_name, format="graphml")
+V(g)$str<-strength(g)
+print("sample graph: mobility fvg")
+print(paste(vcount(g), ecount(g)))
+
+```
+
+## *selection of the algorithm*
+
+*First we select the algorithm. infomap produces a reasonable number of
+communities.*
+
+*The result is a igraph community object*
+
+```{r}
+#NO! cluster_louvain(g,resolution = 1.0)
+#comms <- walktrap.community(g)
+#comms <-  cluster_leiden(g,resolution = 30)
+#comms <-  label.propagation.community(g)
+
+comms <- infomap.community(g)
+
+table(comms$membership)
+
+```
+
+*define a function*
+
+```{r}
+explore_solutions_space <- function(g, tmax=10, met="IM" ){
+    M <- matrix(NA, nrow = vcount(g), ncol = tmax)
+    S <- matrix(0.0,  nrow = tmax, ncol = tmax)  
+    for (i in 1:tmax) {
+        gs <-igraph::permute(g, sample(vcount(g)))   
+        method <- switch(met,
+                 "IM" = igraph::infomap.community,
+                 "LV" = igraph::louvain_clusters, 
+                 "LP" = label.propagation.community)
+        
+        memberships <- method(gs)$membership
+        
+        M[, i] <- memberships[ match(V(g)$name, V(gs)$name) ]
+        for (j in 1:i){ 
+            if (i != j) {
+                sscore<-igraph::compare(M[,i],M[, j], method = "nmi")  
+                S[i,j] <- sscore
+                S[j,i] <- sscore
+                
+             }
+        }
+    }
+    return(list(M = M, S = S))
+}
+```
+
+*Apply*
+
+```{r}
+tmax = 100
+tmp <- explore_solutions_space (g, tmax = tmax, met = "IM")
+M <- tmp$M 
+S <- tmp$S
+print(tmax)
+hist(S)
+
+```
+
+## *a graph-based approach to explore solutions space*
+
+*sims is a list of all possible scores between pairs of solutions*
+
+```{r}
+ssp <- igraph::graph.adjacency(S, 
+                               weighted = TRUE, 
+                               mode = "undirected")
+
+ssp <- igraph::simplify(ssp)
+
+
+comp  <- ssp %>%
+    delete_edges(E(ssp)[edge_attr(ssp)$weight < 1]) %>%
+    components()
+
+V(ssp)$solution <- comp$membership
+#V(ssp)$n <- comp$csize[comp$membership]
+
+print(paste("Solution space has ", comp$no, "components"))
+
+edges_list <- ssp %>%
+        as_long_data_frame() %>%
+        select(from_solution, to_solution, weight) %>%
+        group_by(from_solution, to_solution) %>%
+        summarize(weight = mean(weight))# weigt interpreted as similarity
+    
+ssp1 <- graph_from_data_frame(edges_list, directed = FALSE)
+ssp1 <- igraph::simplify(ssp1)
+
+V(ssp1)$size <- comp$csize[as.numeric(V(ssp1)$name)]
+E(ssp1)$similarity <- round(E(ssp1)$weight / 2, 2) 
+
+df <- data.frame(similarity = E(ssp1)$similarity)
+
+df <- df %>% mutate(colors = case_when(
+    similarity < 0.8 ~ "lightgray",
+    similarity < 0.9 ~ "lightblue",
+    similarity < 0.97 ~ "yellow",
+    similarity >= 0.97 ~ "green"
+  ))
+
+df <- df %>% mutate(width = case_when(
+    similarity < 0.8 ~ NA,
+    similarity < 0.9 ~ .5,
+    similarity < 0.97 ~ 2,
+    similarity >= 0.97 ~ 4
+  ))
+
+vlabels = paste0(V(ssp1)$name, ": ", round(V(ssp1)$size/tmax,2)*100, "%")
+
+plot(ssp1, 
+     vertex.size = V(ssp1)$size/4,
+     vertex.shape = "square",
+     vertex.color = "white",
+     vertex.label = vlabels,
+     edge.width = df$width, 
+     edge.color = df$colors,
+     layout = layout.kamada.kawai)
+
+plot(ssp1, 
+     vertex.size = V(ssp1)$size/4,
+     vertex.shape = "square",
+     vertex.color = "white",
+     vertex.label = vlabels,
+     edge.width = df$width, 
+     edge.color = df$colors,
+     layout = layout.graphopt)
+
+
+plot(ssp1, 
+     vertex.size = V(ssp1)$size/4,
+     vertex.shape = "square",
+     vertex.color = "white",
+     vertex.label = vlabels,
+     edge.width = df$width, 
+     edge.color = df$colors,
+     layout = layout.circle)
+ 
+
+```
+
+```{r}
+
+df <- as.data.frame(get.adjacency(ssp1, attr="similarity", sparse=FALSE))
+
+# Reshape the data frame
+df_lt <- df %>%
+  mutate(row = rownames(df)) %>%
+  pivot_longer(cols = -row, names_to = "col", values_to = "similarity") %>%
+  filter(row > col)
+
+df_lt$color <- cut(df_lt$similarity, 
+                     breaks = c(0, 0.8, 0.9, 0.97, Inf), 
+                     labels = c("gray", "lightyellow", "lightblue", "lightgreen"),
+                     include.lowest = TRUE)
+
+# Plot as a heatmap
+ggplot(df_lt, aes(x=factor(col), y=factor(row), fill=color)) +
+  geom_tile(color="black") +
+  geom_text(aes(label = round(similarity, 9)), color = "black") + 
+  scale_fill_identity()+ #scale_fill_gradient(low="lightgray", high="green")
+  theme_minimal() +
+  labs(x = "solution i", y = "solution j", fill = "similarity")
+```
+
+```{r}
+#install.packages("ggraph")
+require(ggraph)
+
+#https://ggraph.data-imaginist.com/articles/Layouts.html
+
+# Generate plot
+ggraph(ssp1, layout = "fr") + # also kk, circle, ...
+     #geom_edge_link(aes(color = df$colors, width = df$width))+
+    geom_edge_diagonal(aes(color = df$colors, width = df$width)) + 
+    #geom_edge_elbow(aes(color = df$colors, width = df$width))+
+    geom_node_point(aes(size = V(ssp1)$size), color = "gray") + 
+    geom_node_text(aes(label = vlabels), nudge_y = -0.2) + 
+theme_void()
+```
+
+```{r}
+ 
+```
+
+*gr*
+
+```{r}
+ 
+```
+
+```{r}
+equal1 <- E(ssp)$weight == 1
+
+ssp2 <- ssp %>% delete_edges( E(ssp)[ !equal1] )
+
+solution_space <- as_tbl_graph(ssp2) %>%
+    mutate(group = group_infomap()) %>%
+  morph(to_split, group) %>%
+  activate(edges) %>%
+  mutate(edge_group = as.character(.N()$group[1])) %>%
+  unmorph()
+
+ggraph(solution_space, layout = "fr") + theme_void() +  
+    geom_edge_link()+
+    geom_node_point() 
+
+ 
+
+```
+
+*...\
+\# complete function*
+
+```{r}
+explore_solutions_space <- function(g, tmax=10, met="IM" ){
+    M <- matrix(NA, nrow = vcount(g), ncol = tmax)
+    S <- matrix(0.0,  nrow = tmax, ncol = tmax)  
+    for (i in 1:tmax) {
+        gs <-igraph::permute(g, sample(vcount(g)))   
+        method <- switch(met,
+                         "IM" = igraph::infomap.community,
+                         "WT" = igraph::walktrap.community,
+                         "LV" = igraph::cluster_louvain, 
+                         "LD" = igraph::cluster_leiden,
+                         "LP" = label.propagation.community)
+        
+        memberships <- method(gs)$membership
+        
+        M[, i] <- memberships[ match(V(g)$name, V(gs)$name) ]
+        for (j in 1:i){ 
+            if (i != j) {
+                sscore<-igraph::compare(M[,i],M[, j], method = "nmi")  
+                S[i,j] <- sscore
+                S[j,i] <- sscore
+                
+            }
+        }
+    }
+    
+    ssp <- igraph::graph.adjacency(S, 
+                                   weighted = TRUE, 
+                                   mode = "undirected") %>%
+        igraph::simplify()
+    
+    
+    comp  <- ssp %>%
+        delete_edges(E(ssp)[edge_attr(ssp)$weight < 1]) %>%
+        components()
+    
+     
+    V(ssp)$solution <- comp$membership
+
+    edges_list <- ssp %>%
+        as_long_data_frame() %>%
+        select(from_solution, to_solution, weight) %>%
+        group_by(from_solution, to_solution) %>%
+        summarize(weight = mean(weight))# weigt interpreted as similarity
+    
+    ssp1 <- graph_from_data_frame(edges_list, directed = FALSE) %>%
+        igraph::simplify()
+    
+    V(ssp1)$size <- comp$csize[as.numeric(V(ssp1)$name)]
+    E(ssp1)$similarity <- round(E(ssp1)$weight / 2, 3) 
+    
+    df <- data.frame(similarity = E(ssp1)$similarity)
+    
+    df <- df %>% mutate(colors = case_when(
+        similarity < 0.8 ~ "lightgray",
+        similarity < 0.9 ~ "lightblue",
+        similarity < 0.97 ~ "yellow",
+        similarity >= 0.97 ~ "green"
+    ))
+    
+    df <- df %>% mutate(width = case_when(
+        similarity < 0.8 ~ NA,
+        similarity < 0.9 ~ .5,
+        similarity < 0.97 ~ 2,
+        similarity >= 0.97 ~ 4
+    ))
+     
+    E(ssp1)$width <- E(ssp1)$similarity / max(E(ssp1)$similarity)
+    V(ssp1)$vlabels <- paste0(V(ssp1)$name, ": ", round(V(ssp1)$size/tmax,2)*100, "%")
+    
+ ss <- data.frame( id = V(ssp1)$name, 
+                      alpha = V(ssp1)$size / tmax)  %>% 
+    arrange(-alpha) %>%
+    mutate(cumsum_alpha = cumsum(alpha))
+ 
+ ss <- ss %>% mutate(id = 1:nrow(ss))
+    
+
+p1 <- ss %>% ggplot( aes(x = id)) +
+  geom_col(aes(y = alpha),  fill = "blue", alpha = 0.5) +
+  geom_line(aes(y = cumsum_alpha, group = 1), color = "red") +  
+  geom_point(aes(y = cumsum_alpha), color = "red") + 
+  labs(x = "solution ID", y = "relevance of solution", title = "Solution space") +
+    #scale_x_discrete(labels = ss$id) +  
+    geom_hline(yintercept = .5)+
+  theme_minimal()
+    
+    return(list(data = ss, M = M[,as.numeric(V(ssp1)$name)], graph = ssp1, plot = p1))
+    
+    
+
+}
+
+
+```
+
+```{r}
+rc <- CCD::make_ring_of_cliques(4,6,add_center = T, add_bridges = T)
+sol_space <- explore_solutions_space (rc, tmax = 50, met = "LV")
+sol_space$data
+sol_space$plot
+M <- sol_space$M
+Sg <- sol_space$graph
+plot(Sg, edge.width = E(Sg)$weight)
+ 
+
+
+```
+
+```{r}
+     ss <- sol_space$data
+        
+     print("Solutions that appear more than 5 times")
+     print(ss %>% filter(n > 5))
+#     
+    print("Solutions that represent more than 50% of the solutions space")
+     top_solutions <- max(which(ss$cumsum_alpha < 0.50))+1
+    print(ss %>% head(top_solutions))
+     
+     lo <- layout_with_kk(rc)
+     for (i in 1:top_solutions){
+         selected_solution <- which(sol_space$data$id == i) |> head(1)
+         V(rc)$community <- M[,selected_solution]
+         plot.igraph(rc, layout = lo, 
+                     main = paste("solution" , i), 
+                     vertex.color = factor(V(rc)$community), 
+                     vertex.label = NA)
+     
+         
+     }
+```
+
+## explore Ring of Cliques
+
+#rc \<- CCD::make_ring_of_cliques(4,6,add_center = T, add_bridges = T)
+
+\# rc \<- make_graph("Zachary")
+
+\# plot(rc)
+
+\# V(rc)\$name \<- 1:vcount(rc)
+
+# processing mobility fvg with explore solution space and consensus
+
+```{r}
+file_name = "mobility_fvg_sample_01.graphml"   
+g = igraph::read_graph(file_name, format="graphml")
+V(g)$str<-strength(g)
+print("sample graph: mobility fvg")
+print(paste(vcount(g), ecount(g)))
+```
+
+```{r}
+sol_space <- explore_solutions_space (g, tmax = 50, met = "IM")
+M <- sol_space$M
+n_solutions = nrow(sol_space$data)
+print(paste("Solution space has ", n_solutions, "components"))
+   
+    plot.igraph(sol_space$graph, 
+         vertex.size = V(sol_space$graph)$size,
+         vertex.shape = "square",
+         vertex.color = "white",
+         vertex.label = V(sol_space$graph)$vlabels,
+         edge.width = E(sol_space$graph)$width, 
+         #edge.color = df$colors,
+         layout = layout.kamada.kawai) 
+    
+sol_space$data
+sol_space$plot
+```
+
+```{r}
+sol_space <- explore_solutions_space (g, tmax = 50, met = "IM")
+M <- sol_space$M
+n_solutions = nrow(sol_space$data)
+print(paste("Solution space has ", n_solutions, "components"))
+   
+    plot.igraph(sol_space$graph, 
+         vertex.size = V(sol_space$graph)$size,
+         vertex.shape = "square",
+         vertex.color = "white",
+         vertex.label = V(sol_space$graph)$vlabels,
+         edge.width = E(sol_space$graph)$width, 
+         #edge.color = df$colors,
+         layout = layout.kamada.kawai) 
+    
+sol_space$data
+sol_space$plot
+  
+```
+
+```{r}
+sol_space <- explore_solutions_space (g, tmax = 50, met = "LV")
+M <- sol_space$M
+n_solutions = nrow(sol_space$data)
+print(paste("Solution space has ", n_solutions, "components"))
+   
+    plot.igraph(sol_space$graph, 
+         vertex.size = V(sol_space$graph)$size,
+         vertex.shape = "square",
+         vertex.color = "white",
+         vertex.label = V(sol_space$graph)$vlabels,
+         edge.width = E(sol_space$graph)$width, 
+         #edge.color = df$colors,
+         layout = layout.kamada.kawai) 
+    
+sol_space$data
+sol_space$plot
+
+```
+
+```{r}
+
+
+    
+
+    
+```
+
+*The plot illustrates the distribution of alpha values and the
+cumulative sum of alpha values across different IDs. Blue bars represent
+the alpha values, while the red line with markers indicates the
+cumulative sum of alpha values. The plot provides a visual understanding
+of both individual alpha values and their accumulation over IDs.*
+
+# *consensus from solution space*
+
+```{r}
+sol_space <- explore_solutions_space (g, tmax = 50, met = "LV")
+M <- sol_space$M
+alphas <- sol_space$data$alpha
+n <- nrow(M)
+D <- matrix(0,n,n)
+for (s in 1:length(alphas)){#
+    #print(paste("S = ", s))
+    for (i in 1:n){
+        for (j in 1:n){
+            if (M[i,s]== M[j,s]){ 
+                D[i,j]<-D[i,j]+alphas[s]
+#print(paste0( "i=", i, " M[i]=", M[i,s], "  j=", j," M[j]=", M[j,s],"**", alphas[s]))
+                }
+            
+        }
+    }
+}
+
+D <- D |> round(2)
+#D[D==0]<-NA
+ps <- D |> as.vector() |> round(2) |> unique() |> sort()
+
+heatmap( D, 
+        margins = c(0, 0), xlab = "Columns", ylab = "Rows",
+        main = "Heatmap with Custom Color Palette")
+```
+
+## *explore all values of p*
+
+```{r}
+
+
+ps <- D |> as.vector() |> round(2) |> unique() |>  sort()
+ps <- ps[ps > 0.5]
+ps <- ps[ps < 1.0]
+colnames(D) <- 1:n
+df<-data.frame()
+for (p in ps){
+    print(p)
+    comms<- CCD::consensus_communities(D,p, group_outliers = TRUE)
+    df<-rbind(df, data.frame(p=p, 
+                             k=max(comms$cons_comm_label), 
+                             outl = "T"))
+    comms<- CCD::consensus_communities(D,p, group_outliers = FALSE)
+    df<-rbind(df, data.frame(p=p, 
+                             k=max(comms$cons_comm_label), 
+                             outl = "F"))
+}
+
+
+df |> ggplot(aes(x=p, y=k, color = outl))+geom_line()+geom_point()+labs(title="number of communities ")+theme_light()
+
+ 
+
+```
+
+```{r}
+# Example vector of alpha values
+#alphas <- c(0.32, 0.28, 0.21, 0.10, 0.05, 0.03, 0.02) *100
+alphas <- sol_space$data$alpha
+
+# Total number of trials
+T <- sum(alphas)
+
+# Beta-binomial parameters
+alpha <- alphas + 1
+beta <- T - alphas + 1
+
+# Confidence level
+confidence_level <- 0.95
+
+# Function to calculate confidence intervals
+calc_confidence_interval <- function(alpha, beta, confidence_level) {
+  lower <- qbeta((1 - confidence_level) / 2, alpha, beta)
+  upper <- qbeta(1 - (1 - confidence_level) / 2, alpha, beta)
+  return(c(lower, upper))
+}
+
+# Calculate confidence intervals for each proportion
+confidence_intervals <- sapply(1:length(alphas), function(i) calc_confidence_interval(alpha[i], beta[i], confidence_level))
+
+# Plot beta distributions
+x <- seq(0, 1, length.out = 1000)
+colors <- rainbow(length(alphas))
+plot(x, dbeta(x, alpha[1], beta[1]), type = 'l',  xlim = c(0, 1), col = colors[1], main = "Beta Distributions", xlab = "Proportion", ylab = "Density", lwd = 2)
+legend("topright", legend = paste("Alpha", 1:length(alphas)), col = colors, lwd = 2, bty = "n")
+for (i in 2:length(alphas)) {
+  lines(x, dbeta(x, alpha[i], beta[i]), col = colors[i], lwd = 2)
+}
+# Add confidence intervals
+for (i in 1:length(alphas)) {
+  segments(confidence_intervals[1, i], 0, confidence_intervals[1, i], dbeta(confidence_intervals[1, i], alpha[i], beta[i]), col = colors[i], lty = "dashed")
+  segments(confidence_intervals[2, i], 0, confidence_intervals[2, i], dbeta(confidence_intervals[2, i], alpha[i], beta[i]), col = colors[i], lty = "dashed")
+  x_fill <- seq(confidence_intervals[1, i], confidence_intervals[2, i], length.out = 100)
+  y_fill <- dbeta(x_fill, alpha[i], beta[i])
+  col_alpha <- adjustcolor(colors[i], alpha.f = 0.5)
+  polygon(c(confidence_intervals[1, i], x_fill, confidence_intervals[2, i]), c(0, y_fill, 0), col = col_alpha, border = NA)
+}
+
+# Calculate mean values of alpha distributions
+mean_alphas <- alpha / (alpha + beta)
+
+# Calculate cumulative sum of mean values
+cumsum_alpha <- cumsum(mean_alphas)
+
+# Print cumulative sum
+print(cumsum_alpha)
+
+
+```
+
+T
+
+```{r}
+ 
+alphas <- c(0.32, 0.28, 0.21, 0.11, 0.10, 0.05, 0.03, 0.02) *400
+#sol_space <- explore_solutions_space (g, tmax = 50, met = "WT")
+
+#alphas <- sol_space$data$alpha
+# Total number of trials
+T <- sum(alphas)
+
+# Beta-binomial parameters
+alpha <- alphas + 1
+beta <- T - alphas + 1
+
+# Confidence level
+confidence_level <- 0.95
+
+# Function to calculate confidence intervals
+calc_confidence_interval <- function(alpha, beta, confidence_level) {
+  lower <- qbeta((1 - confidence_level) / 2, alpha, beta)
+  upper <- qbeta(1 - (1 - confidence_level) / 2, alpha, beta)
+  return(c(lower, upper))
+}
+
+# Calculate confidence intervals for each proportion
+confidence_intervals <- sapply(1:length(alphas), function(i) calc_confidence_interval(alpha[i], beta[i], confidence_level))
+    
+df <- data.frame(min= confidence_intervals[1,],
+                 max=confidence_intervals[2,]) %>%
+    mutate(mean = round((min + max)/2,2)) 
+df$solution <- factor(1:nrow(df))
+df$solution <- factor(df$solution, levels = rev(levels(df$solution)))
+
+df <- df %>%
+  mutate(ovrl = max >= lag(min, default = first(min)))
+df$top = "other"
+df$top[1] <- "top" 
+for (i in 2:nrow(df)){
+    if (df$ovrl[i] == TRUE & df$top[i-1] == "top"){
+        df$top[i]<- "top"
+    }
+}
+  
+ggplot(df, aes(y = solution)) +
+    geom_rect(aes(xmin = min, xmax = max, ymin = as.numeric(solution) - 0.4, ymax = as.numeric(solution) + 0.4,fill = top) , alpha = 0.3) +
+    geom_segment(aes(x = min, xend = max, yend = solution), size = 1) +
+  geom_point(aes(x = mean, color = top), size = 3) +
+  labs(x = "Alpha", y = "Solution") +
+  geom_text(aes(x = mean, label = mean), vjust = -1.0, size = 3, color = "black") +
+
+  ggtitle("relevance of solution (alpha) and confidence intervals") +
+  theme_minimal()
+
+```
+
+try RC 4,6,B: will deliver more options
+
+```{r}
+x = 1
+y = 2
+print(x+y)
+```
